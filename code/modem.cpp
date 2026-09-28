@@ -10,6 +10,17 @@
 #define MODEM_CEREG_RETRY_BG      3      // 后台恢复时等待网络注册的次数
 #define MODEM_REINIT_INTERVAL_MS  90000UL  // 模组未就绪时的自动重试间隔
 #define MODEM_REINIT_MAX_INTERVAL_MS 300000UL // 连续失败后的最长重试间隔（5 分钟）
+#define SMS_PROMPT_TIMEOUT_MS     3000UL  // 等待 ">" 提示符的上限
+#define SMS_RESULT_TIMEOUT_MS     12000UL // 等待 +CMGS/OK 的上限
+
+// 串口占用标记：短信发送/模组初始化期间独占 Serial1。
+// HTTP 处理器据此快速失败，避免嵌套调用把对方的提示符和结果吞掉而双双卡到超时。
+static bool smsInProgress = false;
+static bool modemInitInProgress = false;
+
+bool modemBusy() {
+  return smsInProgress || modemInitInProgress;
+}
 
 // 发送AT命令并获取响应
 String sendATCommand(const char* cmd, unsigned long timeout) {
@@ -28,11 +39,13 @@ String sendATCommand(const char* cmd, unsigned long timeout) {
         while (millis() - t < 50) {
           if (Serial1.available()) resp += (char)Serial1.read();
           server.handleClient();
+          delay(1);  // 让出 CPU，避免长时间忙等触发任务看门狗
         }
         return resp;
       }
     }
     server.handleClient();
+    delay(1);  // 让出 CPU，避免长时间忙等触发任务看门狗
   }
   return resp;
 }
@@ -100,12 +113,11 @@ static bool sendATWithRetry(const char* cmd, unsigned long timeout, int maxAttem
 bool modemInit(bool background) {
   // 防止重入：modemInit() 内部会调 server.handleClient()，
   // 浏览器超时重试或自动恢复都可能造成嵌套调用
-  static bool inProgress = false;
-  if (inProgress) {
+  if (modemInitInProgress) {
     logCaptureLn(String("模组初始化正在进行，忽略本次调用"));
     return modemReady;
   }
-  inProgress = true;
+  modemInitInProgress = true;
   lastModemInitAttempt = millis();
   modemReady = false;
 
@@ -118,7 +130,7 @@ bool modemInit(bool background) {
 
   if (!modemWaitATReady(atRetry)) {
     logCaptureLn(String("⚠️ 模组AT无响应（未上电/串口异常），放弃本次初始化，稍后自动重试"));
-    inProgress = false;
+    modemInitInProgress = false;
     return false;
   }
   logCaptureLn(String("模组AT响应正常"));
@@ -196,7 +208,7 @@ bool modemInit(bool background) {
   if (!modemReady) {
     logCaptureLn(String("⚠️ 模组初始化未完成，系统将定时自动重试（不影响网页访问）"));
   }
-  inProgress = false;
+  modemInitInProgress = false;
   return modemReady;
 }
 
@@ -243,6 +255,7 @@ bool sendATandWaitOK(const char* cmd, unsigned long timeout) {
       if (resp.indexOf("ERROR") >= 0) return false;
     }
     server.handleClient();
+    delay(1);  // 让出 CPU，避免长时间忙等触发任务看门狗
   }
   return false;
 }
@@ -264,79 +277,135 @@ bool waitCEREG() {
       }
     }
     server.handleClient();
+    delay(1);  // 让出 CPU，避免长时间忙等触发任务看门狗
   }
   return false;
 }
 
+// 取消模组可能残留的 CMGS 输入态：
+// 否则模组会一直等待 PDU 输入，之后所有 AT 指令都被当成短信内容吞掉，
+// 表现为后续每次发送都等不到 ">" 提示符
+static void abortPendingInput() {
+  Serial1.write(0x1B);  // ESC
+  delay(200);
+  while (Serial1.available()) Serial1.read();
+}
+
+static bool sendSMSInternal(const char* phoneNumber, const char* message);
+
 // 发送短信（PDU模式）
+// 整个过程独占 Serial1：期间用 smsInProgress 阻止其它请求再次进入，
+// 每个等待循环都有上界并让出 CPU（否则会一直忙等触发任务看门狗复位）
 bool sendSMS(const char* phoneNumber, const char* message) {
+  if (smsInProgress) {
+    logCaptureLn(String("⚠️ 上一次短信发送尚未结束，忽略本次请求"));
+    return false;
+  }
+  if (!modemReady) {
+    logCaptureLn(String("⚠️ 模组未就绪，无法发送短信"));
+    return false;
+  }
+
+  smsInProgress = true;
+  bool result = sendSMSInternal(phoneNumber, message);
+  smsInProgress = false;
+  return result;
+}
+
+static bool sendSMSInternal(const char* phoneNumber, const char* message) {
   logCaptureLn(String("准备发送短信..."));
-  logCapture(String("目标号码: ")); logCaptureLn(String(phoneNumber));
-  logCapture(String("短信内容: ")); logCaptureLn(String(message));
+  logCaptureLn(String("目标号码: " + String(phoneNumber)));
+  logCaptureLn(String("短信内容: " + String(message)));
 
   // 使用pdulib编码PDU
   pdu.setSCAnumber();  // 使用默认短信中心
   int pduLen = pdu.encodePDU(phoneNumber, message);
-  
-  if (pduLen < 0) {
-    logCapture(String("PDU编码失败，错误码: "));
-    logCaptureLn(String(pduLen));
+
+  if (pduLen <= 0) {
+    logCaptureLn(String("PDU编码失败，错误码: " + String(pduLen)));
     return false;
   }
-  
-  logCapture(String("PDU数据: ")); logCaptureLn(String(pdu.getSMS()));
-  logCapture(String("PDU长度: ")); logCaptureLn(String(pduLen));
-  
+
+  logCaptureLn(String("PDU数据: " + String(pdu.getSMS())));
+  logCaptureLn(String("PDU长度: " + String(pduLen)));
+
   // 发送AT+CMGS命令
   String cmgsCmd = "AT+CMGS=";
   cmgsCmd += pduLen;
-  
+
   while (Serial1.available()) Serial1.read();
   Serial1.println(cmgsCmd);
-  
+
   // 等待 > 提示符
   unsigned long start = millis();
   bool gotPrompt = false;
-  while (millis() - start < 5000) {
-    if (Serial1.available()) {
+  String echo = "";
+  while (millis() - start < SMS_PROMPT_TIMEOUT_MS) {
+    while (Serial1.available()) {
       char c = Serial1.read();
-      logCapture(String(c));
+      echo += c;
       if (c == '>') {
         gotPrompt = true;
         break;
       }
     }
+    if (gotPrompt) break;
+    if (echo.indexOf("ERROR") >= 0) {
+      logCaptureLn(String("AT+CMGS被拒绝: " + echo));
+      return false;
+    }
     server.handleClient();
+    delay(1);
   }
-  
+
   if (!gotPrompt) {
-    logCaptureLn(String("未收到>提示符"));
+    logCaptureLn(String("未收到>提示符，取消本次发送"));
+    abortPendingInput();
     return false;
   }
-  
+
   // 发送PDU数据
   Serial1.print(pdu.getSMS());
   Serial1.write(0x1A);  // Ctrl+Z 结束
-  
-  // 等待响应
+
+  // 等待响应（按整行输出日志，避免逐字符 Serial.print 把等待时间拖长）
   start = millis();
   String resp = "";
-  while (millis() - start < 30000) {
+  String line = "";
+  bool success = false;
+  bool done = false;
+  while (millis() - start < SMS_RESULT_TIMEOUT_MS) {
     while (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
-      logCapture(String(c));
-      if (resp.indexOf("OK") >= 0) {
-        logCaptureLn(String("\n短信发送成功"));
-        return true;
+      if (c == '\n') {
+        line.trim();
+        if (line.length() > 0) logCaptureLn(String("模组< " + line));
+        line = "";
+      } else {
+        line += c;
       }
-      if (resp.indexOf("ERROR") >= 0) {
-        logCaptureLn(String("\n短信发送失败"));
-        return false;
-      }
+      if (resp.indexOf("OK") >= 0) { success = true; done = true; break; }
+      if (resp.indexOf("ERROR") >= 0) { done = true; break; }
     }
+    if (done) break;
     server.handleClient();
+    delay(1);
   }
-  logCaptureLn(String("短信发送超时"));
-  return false;
+
+  line.trim();
+  if (line.length() > 0) logCaptureLn(String("模组< " + line));
+
+  if (!done) {
+    logCaptureLn(String("短信发送超时，取消本次发送"));
+    abortPendingInput();
+    return false;
+  }
+
+  if (success) {
+    logCaptureLn(String("短信发送成功"));
+  } else {
+    logCaptureLn(String("短信发送失败: " + resp));
+  }
+  return success;
 }

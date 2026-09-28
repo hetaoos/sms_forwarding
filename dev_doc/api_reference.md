@@ -155,15 +155,20 @@
 ---
 
 ### `bool sendSMS(const char* phoneNumber, const char* message)`
-**流程**:
-1. `pdu.setSCAnumber()` 使用默认短信中心
-2. `pdu.encodePDU(phoneNumber, message)` 编码
-3. 发送 `AT+CMGS=<pduLen>`
-4. 等待 `>` 提示符（5 秒超时）
-5. 发送 PDU 数据 + `Ctrl+Z` (0x1A)
-6. 等待 OK/ERROR（30 秒超时）
+**并发保护**: 发送期间置 `smsInProgress`，`modemBusy()` 对外可见；重复进入直接返回 false，HTTP 处理器据此返回 429/忙碌提示，避免两个流程共用 `Serial1` 互相吞掉响应。
 
-**返回**: true=成功, false=PDU编码失败/无提示符/ERROR/超时
+**流程**:
+1. 检查 `smsInProgress`（防重入）与 `modemReady`（未就绪直接失败）
+2. `pdu.setSCAnumber()` 使用默认短信中心
+3. `pdu.encodePDU(phoneNumber, message)` 编码
+4. 发送 `AT+CMGS=<pduLen>`
+5. 等待 `>` 提示符（3 秒超时，超时/无提示符则发 ESC 取消并清空缓冲）
+6. 发送 PDU 数据 + `Ctrl+Z` (0x1A)
+7. 等待 OK/ERROR（12 秒超时，超时同样发 ESC 取消）
+
+**返回**: true=成功, false=模组忙/未就绪/PDU编码失败/无提示符/ERROR/超时
+
+**注意**: 所有等待循环均带 `delay(1)`，长时间忙等会触发任务看门狗复位。
 
 ---
 

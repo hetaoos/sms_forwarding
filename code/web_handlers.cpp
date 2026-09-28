@@ -184,9 +184,18 @@ void handleToolsPage() {
   handleRoot();
 }
 
+// 模组串口被占用（发短信/初始化）时快速失败：
+// 多个请求同时操作 Serial1 会互相吞掉对方的响应，导致双方都卡到超时
+static bool rejectIfModemBusy() {
+  if (!modemBusy()) return false;
+  server.send(429, "application/json", "{\"success\":false,\"message\":\"模组正忙，请稍后重试\"}");
+  return true;
+}
+
 // 处理飞行模式控制请求
 void handleFlightMode() {
   if (!checkAuth()) return;
+  if (rejectIfModemBusy()) return;
   
   String action = server.arg("action");
   String json = "{";
@@ -295,6 +304,7 @@ void handleFlightMode() {
 // 处理AT指令测试请求
 void handleATCommand() {
   if (!checkAuth()) return;
+  if (rejectIfModemBusy()) return;
   
   String cmd = server.arg("cmd");
   bool success = false;
@@ -326,6 +336,7 @@ void handleATCommand() {
 // 处理模组信息查询请求
 void handleQuery() {
   if (!checkAuth()) return;
+  if (rejectIfModemBusy()) return;
   
   String type = server.arg("type");
   String json = "{";
@@ -631,13 +642,15 @@ void handleSendSms() {
     resultMsg = "错误：请输入目标号码";
   } else if (content.length() == 0) {
     resultMsg = "错误：请输入短信内容";
+  } else if (modemBusy()) {
+    resultMsg = "错误：模组正忙（上一次操作尚未结束），请稍后重试";
   } else {
     logCaptureLn(String("网页端发送短信请求"));
     logCaptureLn(String("目标号码: " + phone));
     logCaptureLn(String("短信内容: " + content));
     
     success = sendSMS(phone.c_str(), content.c_str());
-    resultMsg = success ? "短信发送成功！" : "短信发送失败，请检查模组状态";
+    resultMsg = success ? "短信发送成功！" : "短信发送失败，请检查模组状态与日志";
   }
   
   String html = R"rawliteral(
@@ -673,6 +686,7 @@ void handleSendSms() {
 // 处理Ping请求
 void handlePing() {
   if (!checkAuth()) return;
+  if (rejectIfModemBusy()) return;
   
   logCaptureLn(String("网页端发起Ping请求"));
   
@@ -819,6 +833,7 @@ void handlePing() {
     
     if (gotError || gotPingResult) break;
     server.handleClient();
+    delay(1);  // 让出 CPU，避免长时间忙等触发任务看门狗
   }
   
   logCaptureLn(String("\nPing操作完成"));
@@ -972,6 +987,7 @@ void handleLog() {
 // 模组控制命令
 void handleModem() {
   if (!checkAuth()) return;
+  if (rejectIfModemBusy()) return;
 
   // 防止重入：modemInit() 内部会调 server.handleClient()，
   // 若浏览器超时重试会导致嵌套调用，最终拖垮 WiFi
