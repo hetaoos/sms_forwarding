@@ -28,12 +28,14 @@
    ├── loadConfig()                                          // NVS → config
    └── configValid = isConfigValid()                        // 校验
 
-5. 模组初始化 (AT 指令序列，每步失败重试+LED闪烁)
-   ├── sendATandWaitOK("AT", 1000)                          // 握手
-   ├── sendATandWaitOK("AT+CGACT=0,1", 5000)               // 禁数据(省流量)
-   ├── sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000)          // 短信URC上报
-   ├── sendATandWaitOK("AT+CMGF=0", 1000)                   // PDU模式
-   └── waitCEREG()                                           // 等网络注册
+5. 模组初始化 modemInit() (每步失败有限次重试+LED闪烁，绝不无限等待)
+   ├── modemWaitATReady()   "AT" ×8                          // 握手，中途失败会断电重启一次
+   ├── sendATWithRetry("AT+CGACT=0,1", 5000) ×3             // 禁数据(省流量)，失败仅告警
+   ├── sendATWithRetry("AT+CNMI=2,2,0,0,0", 1000) ×3        // 短信URC上报
+   ├── sendATWithRetry("AT+CMGF=0", 1000) ×3                // PDU模式
+   └── waitCEREG() ×20                                       // 等网络注册
+   → 任一步失败则返回 false，modemReady=false，由 loop() 中的
+     modemAutoRecover() 每 90 秒用更少的重试次数(background=true)自动重试
 
 6. WiFi 连接
    ├── WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN)             // 扫描全部信道

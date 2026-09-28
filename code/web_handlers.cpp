@@ -1003,6 +1003,7 @@ void handleModem() {
     // EN 引脚断电重启（内部已调用 modemInit()）
     logCaptureLn(String("网页端请求硬重启模组..."));
     server.send(200, "application/json", "{\"success\":true,\"message\":\"正在硬重启模组，请等待约 15 秒后刷新页面\"}");
+    busy = false;  // 先释放，否则 resetModule() 内部初始化失败后 busy 永远为真
     resetModule();
     return;
   }

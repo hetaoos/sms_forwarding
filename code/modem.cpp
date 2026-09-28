@@ -1,6 +1,16 @@
 #include "modem.h"
 #include "web_handlers.h"
 
+// 初始化重试上限（所有等待都必须有上界，避免模组异常时永久卡死/反复重启）
+#define MODEM_AT_RETRY            8      // 开机握手重试次数
+#define MODEM_AT_RETRY_BG         3      // 后台自动恢复时的握手重试次数
+#define MODEM_CMD_RETRY           3      // 单条 AT 配置命令重试次数
+#define MODEM_CMD_RETRY_BG        1      // 后台恢复时单条命令只试一次，尽量少阻塞主循环
+#define MODEM_CEREG_RETRY         20     // 开机等待网络注册的次数（每次约 2 秒）
+#define MODEM_CEREG_RETRY_BG      3      // 后台恢复时等待网络注册的次数
+#define MODEM_REINIT_INTERVAL_MS  90000UL  // 模组未就绪时的自动重试间隔
+#define MODEM_REINIT_MAX_INTERVAL_MS 300000UL // 连续失败后的最长重试间隔（5 分钟）
+
 // 发送AT命令并获取响应
 String sendATCommand(const char* cmd, unsigned long timeout) {
   while (Serial1.available()) Serial1.read();
@@ -27,34 +37,89 @@ String sendATCommand(const char* cmd, unsigned long timeout) {
   return resp;
 }
 
+// 等待指定毫秒，期间持续处理 HTTP 请求（避免断电重启时网页长时间无响应）
+static void responsiveDelay(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    server.handleClient();
+    delay(1);
+  }
+}
+
 // 新增"模组断电重启"函数
 void modemPowerCycle() {
   pinMode(MODEM_EN_PIN, OUTPUT);
 
   logCaptureLn(String("EN 拉低：关闭模组"));
   digitalWrite(MODEM_EN_PIN, LOW);
-  delay(1200);  // 关机时间给够
+  responsiveDelay(1200);  // 关机时间给够
 
   logCaptureLn(String("EN 拉高：开启模组"));
   digitalWrite(MODEM_EN_PIN, HIGH);
-  delay(6000);  // 等模组完全启动再发AT（关键）
+  responsiveDelay(6000);  // 等模组完全启动再发AT（关键）
 }
 
 // 重启模组（EN引脚断电重启 + 重新初始化）
 void resetModule() {
   logCaptureLn(String("正在硬重启模组（EN 断电重启）..."));
   modemPowerCycle();
-  modemInit();
+  if (!modemInit()) {
+    logCaptureLn(String("⚠️ 硬重启后模组仍不可用，稍后将自动重试初始化"));
+  }
+}
+
+// 与模组建立 AT 握手，最多尝试 maxAttempts 次；中途做一次断电重启尝试唤醒
+// 返回 false 表示模组始终无响应（此时绝不能无限重试）
+static bool modemWaitATReady(int maxAttempts) {
+  for (int i = 0; i < maxAttempts; i++) {
+    if (sendATandWaitOK("AT", 1000)) return true;
+    logCaptureLn(String("AT未响应，重试 " + String(i + 1) + "/" + String(maxAttempts)));
+    blink_short();
+    // 连续无响应，做一次断电重启再试
+    if (maxAttempts >= 2 && i + 1 == maxAttempts / 2) {
+      logCaptureLn(String("AT持续无响应，对模组做一次断电重启"));
+      modemPowerCycle();
+    }
+  }
+  return false;
+}
+
+// 发送配置类 AT 命令并有限次重试
+static bool sendATWithRetry(const char* cmd, unsigned long timeout, int maxAttempts) {
+  for (int i = 0; i < maxAttempts; i++) {
+    if (sendATandWaitOK(cmd, timeout)) return true;
+    logCaptureLn(String(String(cmd) + " 失败，重试 " + String(i + 1) + "/" + String(maxAttempts)));
+    blink_short();
+  }
+  return false;
 }
 
 // 模组 AT 初始化流程（setup 中调用，resetModule 后也调用）
-void modemInit() {
+// background=true 表示后台自动恢复，使用更少的重试次数，尽量少阻塞主循环
+// 返回 true 表示模组可用（已注册网络且短信参数配置成功）
+bool modemInit(bool background) {
+  // 防止重入：modemInit() 内部会调 server.handleClient()，
+  // 浏览器超时重试或自动恢复都可能造成嵌套调用
+  static bool inProgress = false;
+  if (inProgress) {
+    logCaptureLn(String("模组初始化正在进行，忽略本次调用"));
+    return modemReady;
+  }
+  inProgress = true;
+  lastModemInitAttempt = millis();
+  modemReady = false;
+
+  int atRetry = background ? MODEM_AT_RETRY_BG : MODEM_AT_RETRY;
+  int cmdRetry = background ? MODEM_CMD_RETRY_BG : MODEM_CMD_RETRY;
+  int ceregRetry = background ? MODEM_CEREG_RETRY_BG : MODEM_CEREG_RETRY;
+
   // 清掉上电噪声/残留
   while (Serial1.available()) Serial1.read();
 
-  while (!sendATandWaitOK("AT", 1000)) {
-    logCaptureLn(String("AT未响应，重试..."));
-    blink_short();
+  if (!modemWaitATReady(atRetry)) {
+    logCaptureLn(String("⚠️ 模组AT无响应（未上电/串口异常），放弃本次初始化，稍后自动重试"));
+    inProgress = false;
+    return false;
   }
   logCaptureLn(String("模组AT响应正常"));
 
@@ -89,44 +154,80 @@ void modemInit() {
   }
 
   if(need_set_CGACT) {
-    while (!sendATandWaitOK("AT+CGACT=0,1", 5000)) {
-      logCaptureLn(String("设置CGACT失败，重试..."));
-      blink_short();
+    // 仅为省流量，失败不阻断短信功能，交由后续自动重试
+    if (sendATWithRetry("AT+CGACT=0,1", 5000, cmdRetry)) {
+      logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
+    } else {
+      logCaptureLn(String("⚠️ 设置CGACT失败，跳过（可能导致流量消耗）"));
     }
-    logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
   } else {
     logCaptureLn(String("该型号无法配置(AT+CGACT=0,1)，跳过该命令，会不会消耗流量？自求多福"));
   }
-  while (!sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000)) {
-    logCaptureLn(String("设置CNMI失败，重试..."));
+
+  bool cnmiOk = sendATWithRetry("AT+CNMI=2,2,0,0,0", 1000, cmdRetry);
+  if (cnmiOk) {
+    logCaptureLn(String("CNMI参数设置完成"));
+  } else {
+    logCaptureLn(String("⚠️ 设置CNMI失败，短信上报可能不可用"));
+  }
+
+  bool cmgfOk = sendATWithRetry("AT+CMGF=0", 1000, cmdRetry);
+  if (cmgfOk) {
+    logCaptureLn(String("PDU模式设置完成"));
+  } else {
+    logCaptureLn(String("⚠️ 设置PDU模式失败，短信收发不可用"));
+  }
+
+  int ceregCount = 0;
+  while (!waitCEREG() && ceregCount < ceregRetry) {
+    logCaptureLn(String("等待网络注册... " + String(ceregCount + 1) + "/" + String(ceregRetry)));
+    ceregCount++;
     blink_short();
   }
-  logCaptureLn(String("CNMI参数设置完成"));
-  while (!sendATandWaitOK("AT+CMGF=0", 1000)) {
-    logCaptureLn(String("设置PDU模式失败，重试..."));
-    blink_short();
-  }
-  logCaptureLn(String("PDU模式设置完成"));
-  int ceregRetry = 0;
-  while (!waitCEREG() && ceregRetry < 30) {
-    logCaptureLn(String("等待网络注册..."));
-    ceregRetry++;
-    blink_short();
-  }
-  if (ceregRetry < 30) {
+
+  bool registered = (ceregCount < ceregRetry);
+  if (registered) {
     logCaptureLn(String("网络已注册"));
-    modemReady = true;
   } else {
     logCaptureLn(String("⚠️ 网络注册超时（无SIM卡或信号差），模组功能不可用"));
-    modemReady = false;
+  }
+
+  modemReady = registered && cnmiOk && cmgfOk;
+  if (!modemReady) {
+    logCaptureLn(String("⚠️ 模组初始化未完成，系统将定时自动重试（不影响网页访问）"));
+  }
+  inProgress = false;
+  return modemReady;
+}
+
+// 模组未就绪时，在主循环中定时重试初始化（有上界，不会卡死）
+// 连续失败时按 2 倍退避拉长间隔，最长 MODEM_REINIT_MAX_INTERVAL_MS
+void modemAutoRecover() {
+  static unsigned long reinitInterval = MODEM_REINIT_INTERVAL_MS;
+
+  if (modemReady) {
+    reinitInterval = MODEM_REINIT_INTERVAL_MS;
+    return;
+  }
+  if (millis() - lastModemInitAttempt < reinitInterval) return;
+
+  logCaptureLn(String("模组未就绪，尝试重新初始化..."));
+  bool ok = modemInit(true);
+  if (ok) {
+    reinitInterval = MODEM_REINIT_INTERVAL_MS;
+  } else {
+    reinitInterval = (reinitInterval * 2 > MODEM_REINIT_MAX_INTERVAL_MS)
+                         ? MODEM_REINIT_MAX_INTERVAL_MS
+                         : reinitInterval * 2;
+    logCaptureLn(String("模组恢复失败，" + String(reinitInterval / 1000) + " 秒后再次尝试"));
   }
 }
 
 void blink_short(unsigned long gap_time) {
   digitalWrite(LED_BUILTIN, LOW);
-  delay(50);
+  responsiveDelay(50);
   digitalWrite(LED_BUILTIN, HIGH);
-  delay(gap_time);
+  responsiveDelay(gap_time);  // 重试间隙同样保持 HTTP 响应
 }
 
 bool sendATandWaitOK(const char* cmd, unsigned long timeout) {

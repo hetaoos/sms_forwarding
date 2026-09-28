@@ -97,16 +97,38 @@
 2. 拉低 1200ms → 关闭模组
 3. 拉高 6000ms → 开启模组并等待启动
 
-**注意**: 调用后需清空 Serial1 缓冲区（该函数不自动清空）
+**注意**:
+- 两段等待均使用 `responsiveDelay()`（内部循环 `server.handleClient() + delay(1)`），断电重启期间网页仍可访问
+- 调用后需清空 Serial1 缓冲区（该函数不自动清空）
 
 ---
 
 ### `void resetModule()`
 **行为**:
 1. 调用 `modemPowerCycle()`
-2. 清空 Serial1
-3. 循环 10 次尝试 `sendATandWaitOK("AT", 1000)`
-4. 打印恢复结果
+2. 调用 `modemInit()` 重新初始化
+3. 初始化失败只打印告警，不再阻塞等待
+
+---
+
+### `bool modemInit(bool background = false)`
+**用途**: 模组 AT 初始化（握手 → 禁数据 → CNMI → PDU → 等注册）。
+
+**参数**:
+- `background`: `true` 表示主循环自动恢复调用，使用更少的重试次数（AT ×3 / 命令 ×1 / CEREG ×3），避免长时间阻塞 `loop()`
+
+**关键约束**: 所有等待都有重试上界，任何一步失败都会放弃本次初始化并返回 false（历史上曾因 `while(!sendATandWaitOK(...))` 无上界导致开机永久卡死/反复重启）。
+
+**返回**: `true` = 已注册网络且 CNMI/CMGF 配置成功（同时置 `modemReady`）
+
+---
+
+### `void modemAutoRecover()`
+**用途**: 由 `loop()` 每轮调用；当 `modemReady == false` 且距上次初始化超过当前间隔时，自动以 `background=true` 重试一次初始化。
+
+**退避策略**: 初始间隔 90 秒，每次失败翻倍（90 → 180 → 300 秒封顶），恢复成功后重置为 90 秒。
+
+**说明**: 初始化过程本身是同步的，但所有等待都走 `server.handleClient()`，因此不会让网页长时间无响应。
 
 ---
 

@@ -114,6 +114,7 @@ void loop() {
     }
   }
   checkConcatTimeout();
+  modemAutoRecover();
   if (Serial.available()) Serial1.write(Serial.read());
   checkSerial1URC();
 }
