@@ -416,7 +416,7 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 | type | AT 指令 | 返回内容 |
 |---|---|---|
 | `ati` | `ATI` | 制造商/型号/固件版本 |
-| `signal` | `AT+CESQ` | RSRP/RSRQ 信号强度 |
+| `signal` | `AT+CESQ` + `AT+CSQ`（`getModemSignal()`） | RSRP/RSRQ/RSSI/BER |
 | `siminfo` | `AT+CIMI` `AT+ICCID` `AT+CNUM` | IMSI/ICCID/本机号码 |
 | `network` | `AT+CEREG?` `AT+COPS?` `AT+CGACT?` `AT+CGDCONT?` | 注册/运营商/数据/APN |
 | `wifi` | (WiFi 对象) | SSID/RSSI/IP/网关/DNS/MAC/BSSID/信道 |

@@ -382,62 +382,22 @@ void handleQuery() {
     }
   }
   else if (type == "signal") {
-    // 信号质量查询
-    String resp = sendATCommand("AT+CESQ", 2000);
-    logCaptureLn(String("CESQ响应: " + resp));
-    
-    if (resp.indexOf("+CESQ:") >= 0) {
+    // 信号质量查询（与 /modem?action=signal 共用 getModemSignal()，口径一致）
+    SignalInfo sig;
+    if (getModemSignal(sig)) {
       success = true;
-      // 解析 +CESQ: <rxlev>,<ber>,<rscp>,<ecno>,<rsrq>,<rsrp>
-      int idx = resp.indexOf("+CESQ:");
-      String params = resp.substring(idx + 6);
-      int endIdx = params.indexOf('\r');
-      if (endIdx < 0) endIdx = params.indexOf('\n');
-      if (endIdx > 0) params = params.substring(0, endIdx);
-      params.trim();
-      
-      // 分割参数
-      String values[6];
-      int valIdx = 0;
-      int startPos = 0;
-      for (int i = 0; i <= params.length() && valIdx < 6; i++) {
-        if (i == params.length() || params.charAt(i) == ',') {
-          values[valIdx] = params.substring(startPos, i);
-          values[valIdx].trim();
-          valIdx++;
-          startPos = i + 1;
-        }
-      }
-      
-      // RSRP转换为dBm (0-97映射到-140到-44 dBm, 99表示未知)
-      int rsrp = values[5].toInt();
-      String rsrpStr;
-      if (rsrp == 99 || rsrp == 255) {
-        rsrpStr = "未知";
-      } else {
-        int rsrpDbm = -140 + rsrp;
-        rsrpStr = String(rsrpDbm) + " dBm";
-        if (rsrpDbm >= -80) rsrpStr += " (信号极好)";
-        else if (rsrpDbm >= -90) rsrpStr += " (信号良好)";
-        else if (rsrpDbm >= -100) rsrpStr += " (信号一般)";
-        else if (rsrpDbm >= -110) rsrpStr += " (信号较弱)";
-        else rsrpStr += " (信号很差)";
-      }
-      
-      // RSRQ转换 (0-34映射到-19.5到-3 dB)
-      int rsrq = values[4].toInt();
-      String rsrqStr;
-      if (rsrq == 99 || rsrq == 255) {
-        rsrqStr = "未知";
-      } else {
-        float rsrqDb = -19.5 + rsrq * 0.5;
-        rsrqStr = String(rsrqDb, 1) + " dB";
-      }
-      
       message = "<table class='info-table'>";
-      message += "<tr><td>信号强度 (RSRP)</td><td>" + rsrpStr + "</td></tr>";
-      message += "<tr><td>信号质量 (RSRQ)</td><td>" + rsrqStr + "</td></tr>";
-      message += "<tr><td>原始数据</td><td>" + params + "</td></tr>";
+      if (sig.lte) {
+        message += "<tr><td>信号强度 (RSRP)</td><td>" + sig.rsrpText + "</td></tr>";
+        message += "<tr><td>信号质量 (RSRQ)</td><td>" + sig.rsrqText + "</td></tr>";
+      } else {
+        // 未取到 LTE 指标时只展示 CSQ 的 RSSI，避免把 RSSI 当 RSRP 上报
+        message += "<tr><td>信号强度 (RSRP)</td><td>未知</td></tr>";
+      }
+      message += "<tr><td>接收电平 (RSSI)</td><td>" + (sig.rssiText.length() > 0 ? sig.rssiText : String("未知")) + "</td></tr>";
+      message += "<tr><td>误码率 (BER)</td><td>" + String(sig.ber) + "</td></tr>";
+      message += "<tr><td>数据来源</td><td>" + sig.source + "</td></tr>";
+      message += "<tr><td>原始数据</td><td>" + sig.raw + "</td></tr>";
       message += "</table>";
     } else {
       message = "查询失败";
@@ -1024,29 +984,18 @@ void handleModem() {
     return;
   }
   else if (action == "signal") {
-    logCaptureLn(String("网页端查询信号: AT+CSQ"));
-    String resp = sendATCommand("AT+CSQ", 3000);
-    int csqIdx = resp.indexOf("+CSQ:");
-    if (csqIdx >= 0) {
-      String csqLine = resp.substring(csqIdx);
-      csqLine = csqLine.substring(0, csqLine.indexOf('\n'));
-      csqLine.trim();
-      int commaIdx = csqLine.indexOf(',');
-      if (commaIdx >= 0) {
-        int rssi = csqLine.substring(csqLine.indexOf(':') + 1, commaIdx).toInt();
-        int ber = csqLine.substring(commaIdx + 1).toInt();
-        int dbm = (rssi == 99) ? -999 : (-113 + rssi * 2);
-        String quality;
-        if (rssi >= 19) quality = "优秀";
-        else if (rssi >= 14) quality = "良好";
-        else if (rssi >= 10) quality = "一般";
-        else if (rssi >= 5) quality = "较差";
-        else quality = "很差";
-        message = "RSRP: " + String(dbm) + " dBm (" + quality + "), RSSI: " + String(rssi) + ", BER: " + String(ber);
-        success = true;
-      }
+    logCaptureLn(String("网页端查询信号"));
+    // 与 /query?type=signal 共用同一实现，避免两个入口给出不同的数值
+    SignalInfo sig;
+    if (getModemSignal(sig)) {
+      String rsrp = sig.lte ? sig.rsrpText : String("未知");
+      String rssi = sig.rssiText.length() > 0 ? sig.rssiText : String("未知");
+      message = "RSRP: " + rsrp + ", RSSI: " + rssi + ", BER: " + String(sig.ber) +
+                ", 来源: " + sig.source;
+      success = true;
+    } else {
+      message = "无法获取信号（模组无响应）";
     }
-    if (!success) message = "无法获取信号: " + resp;
   }
   else if (action == "operator") {
     logCaptureLn(String("网页端查询运营商: AT+COPS?"));

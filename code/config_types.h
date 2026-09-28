@@ -50,6 +50,29 @@ struct Config {
 #define DEFAULT_WEB_USER "admin"
 #define DEFAULT_WEB_PASS "admin123"
 
+// ---- 模组信号信息 ----
+// 所有信号查询必须统一走 modem.cpp 的 getModemSignal() 得到本结构体，
+// 避免不同入口各算各的导致页面上出现互相矛盾的数值。
+// LTE 指标（RSRP/RSRQ）优先取自 AT+CESQ，取不到时回退到 AT+CSQ（只给 RSSI）。
+struct SignalInfo {
+  bool valid;       // 是否取到了有效信号值
+  bool lte;         // true=数据源为 AT+CESQ（LTE 指标有效），false=仅有 CSQ 的 RSSI
+  int rsrpDbm;      // LTE RSRP (dBm)，lte=false 时无意义（不要展示）
+  float rsrqDb;     // LTE RSRQ (dB)，lte=false 时无意义（不要展示）
+  int rssiDbm;      // CSQ 推算的接收电平 (dBm)
+  int ber;          // 误码率 0-7，99 表示未知
+  String source;    // 数据来源描述，如 "AT+CESQ" / "AT+CESQ + AT+CSQ"
+  String raw;       // 模组返回的原始参数串
+  String rsrpText;  // RSRP 展示文案（含单位与评级），未知时为 "未知"
+  String rsrqText;  // RSRQ 展示文案（含单位），未知时为 "未知"
+  String rssiText;  // RSSI 展示文案（含单位与评级）
+  String quality;   // 统一评级：极好 / 良好 / 一般 / 较弱 / 很差，未知时为 "未知"
+
+  SignalInfo()
+    : valid(false), lte(false), rsrpDbm(0), rsrqDb(0.0f), rssiDbm(0), ber(99),
+      quality("未知") {}
+};
+
 // 长短信合并相关定义
 #define MAX_CONCAT_PARTS 10       // 最大支持的长短信分段数
 #define CONCAT_TIMEOUT_MS 30000   // 长短信等待超时时间(毫秒)

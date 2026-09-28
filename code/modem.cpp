@@ -282,6 +282,113 @@ bool waitCEREG() {
   return false;
 }
 
+// 截取 URC 行的参数部分：从 "+CMD:" 之后到换行符为止
+static String extractParams(const String& resp, const String& prefix) {
+  int idx = resp.indexOf(prefix);
+  if (idx < 0) return "";
+  String params = resp.substring(idx + prefix.length());
+  int end = params.indexOf('\r');
+  if (end < 0) end = params.indexOf('\n');
+  if (end > 0) params = params.substring(0, end);
+  params.trim();
+  return params;
+}
+
+// 按逗号切分参数，返回实际取到的段数
+static int splitParams(const String& params, String* out, int max) {
+  int count = 0;
+  int start = 0;
+  for (int i = 0; i <= params.length() && count < max; i++) {
+    if (i == params.length() || params.charAt(i) == ',') {
+      out[count] = params.substring(start, i);
+      out[count].trim();
+      count++;
+      start = i + 1;
+    }
+  }
+  return count;
+}
+
+// LTE RSRP 评级（dBm）
+static String rateRsrp(int dbm) {
+  if (dbm >= -80) return "极好";
+  if (dbm >= -90) return "良好";
+  if (dbm >= -100) return "一般";
+  if (dbm >= -110) return "较弱";
+  return "很差";
+}
+
+// CSQ 推算出的 RSSI 评级（dBm）
+static String rateRssi(int dbm) {
+  if (dbm >= -70) return "极好";
+  if (dbm >= -80) return "良好";
+  if (dbm >= -90) return "一般";
+  if (dbm >= -100) return "较弱";
+  return "很差";
+}
+
+// 信号强度统一查询入口。
+// 网页的 /query?type=signal 与 /modem?action=signal 都必须走这里，
+// 否则不同接口用不同 AT 指令、不同换算公式，页面上会出现互相矛盾的数字。
+// 口径：优先 LTE 指标 AT+CESQ（RSRP/RSRQ）；取不到或不合法时回退 AT+CSQ（只有 RSSI，
+// 且必须标为 RSSI，绝不能当作 RSRP 展示）。
+bool getModemSignal(SignalInfo& info) {
+  info = SignalInfo();
+
+  // 1) LTE 指标：+CESQ: <rxlev>,<ber>,<rscp>,<ecno>,<rsrq>,<rsrp>
+  String cesqParams = extractParams(sendATCommand("AT+CESQ", 2000), "+CESQ:");
+  if (cesqParams.length() > 0) {
+    String v[6];
+    if (splitParams(cesqParams, v, 6) == 6) {
+      int rsrpRaw = v[5].toInt();
+      int rsrqRaw = v[4].toInt();
+      // 0-97 为有效值，99/255 表示未知或不支持
+      if (rsrpRaw >= 0 && rsrpRaw <= 97) {
+        info.lte = true;
+        info.rsrpDbm = -140 + rsrpRaw;
+        info.rsrpText = String(info.rsrpDbm) + " dBm (" + rateRsrp(info.rsrpDbm) + ")";
+        info.quality = rateRsrp(info.rsrpDbm);
+      }
+      // RSRQ: 0-34 映射到 -19.5 ~ -3 dB，99/255 为未知
+      if (rsrqRaw >= 0 && rsrqRaw <= 34) {
+        info.rsrqDb = -19.5f + rsrqRaw * 0.5f;
+        info.rsrqText = String(info.rsrqDb, 1) + " dB";
+      }
+      info.raw = cesqParams;
+      info.source = "AT+CESQ";
+      info.valid = info.lte;  // 只有拿到 LTE 的 RSRP 才算有效信号查询
+    }
+  }
+
+  // 2) CSQ 兜底：+CSQ: <rssi>,<ber>，rssi 0-31 映射到 -113 ~ -51 dBm，99 为未知
+  String csqParams = extractParams(sendATCommand("AT+CSQ", 3000), "+CSQ:");
+  if (csqParams.length() > 0) {
+    String c[2];
+    if (splitParams(csqParams, c, 2) == 2) {
+      int rssiRaw = c[0].toInt();
+      info.ber = c[1].toInt();
+      if (rssiRaw >= 0 && rssiRaw <= 31) {
+        info.rssiDbm = -113 + rssiRaw * 2;
+        info.rssiText = String(info.rssiDbm) + " dBm (" + rateRssi(info.rssiDbm) + ")";
+        if (info.lte) {
+          info.source = "AT+CESQ + AT+CSQ";
+        } else {
+          // 没有 LTE 指标时只能用 RSSI 兜底，此时切勿把该值标成 RSRP
+          info.valid = true;
+          info.raw = csqParams;
+          info.source = "AT+CSQ";
+          info.quality = rateRssi(info.rssiDbm);
+        }
+      }
+    }
+  }
+
+  if (!info.valid) info.quality = "未知";
+  logCaptureLn(String("信号查询[" + info.source + "]: RSRP=" + info.rsrpText +
+                      ", RSSI=" + info.rssiText + ", raw=" + info.raw));
+  return info.valid;
+}
+
 // 取消模组可能残留的 CMGS 输入态：
 // 否则模组会一直等待 PDU 输入，之后所有 AT 指令都被当成短信内容吞掉，
 // 表现为后续每次发送都等不到 ">" 提示符
