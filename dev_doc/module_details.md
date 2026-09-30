@@ -250,13 +250,13 @@ ESP32                         模组
 ### 推送通道执行流程
 
 ```
-sendSMSToServer(sender, message, timestamp, senderName, verifyCode)
-  │  ← senderName/verifyCode 由 processSmsContent() 调用 parseSmsMeta(text) 解析而来
-  ├─ 检查 WiFi 连接
-  ├─ 检查是否有启用的有效通道
+notifyQueueSms(sender, message, timestamp)     ← 短信 URC 回调里只做这一步（入队）
   │
-  └─ for each valid channel:
-       └─ sendToChannel(channel, sender, message, timestamp, senderName, verifyCode)
+  ▼ 队列内由 processNotifyQueue() 分片推进（每轮主循环最多一次网络请求）
+NOTIFY_STAGE_PUSH:
+  └─ for each valid channel（每轮推进一个通道）:
+       └─ sendToChannel(channel, sender, message, timestamp, senderName, verifyCode, maxAttempts=1)
+            │  ← senderName/verifyCode 由 push.cpp 内部调用 parseSmsMeta() 解析而来
             │
             ├─ jsonEscape() 转义 sender/message/timestamp/senderName/verifyCode
             ├─ 构建统一富文本 notifyText 与统一标题 titleText（验证码优先入标题）
@@ -282,14 +282,14 @@ sendSMSToServer(sender, message, timestamp, senderName, verifyCode)
 
 ### 短信元信息解析（parseSmsMeta）
 
-在 `processSmsContent()` 中，收到短信正文后会调用 `parseSmsMeta(const String& message, String& senderName, String& verifyCode)` 自动提取两项元信息：
+发送阶段（队列处理到推送/邮件步骤时）会调用 `parseSmsMeta(const String& message, String& senderName, String& verifyCode)` 自动提取两项元信息：
 
 - **发送者名称 `senderName`**：扫描正文中全部 `【...】` / `[[...]]` / `[...]` 片段，**优先选取最靠近开头或结尾（即离任一边缘最近）的括号内容**；结果为括号之间的纯文本，不包含任何括号字符（`【】`、`[]`、`[[]]` 均被丢弃）；无则空串。
   - 当开头与结尾各有括号时，按"到最近边缘的距离"比较，距离相同则取更靠近开头的。
   - 注意 `【`/`】` 为 3 字节 UTF-8，匹配按字节索引跳过整个字符，不会残留半个括号字节。
 - **验证码 `verifyCode`**：取正文中首个长度 4~6 的连续数字串（等价于"前后不为其他数字"）；无则空串。
 
-两者解析结果会随 `sendSMSToServer` / `sendToChannel` 一起传入所有通道，并用于增强通知标题与正文（参考 `dev_doc/send_notification.sh` 的标题逻辑：验证码优先进入标题）。
+两者解析结果会随 `sendToChannel` 一起传入所有通道，并用于增强通知标题与正文（参考 `dev_doc/send_notification.sh` 的标题逻辑：验证码优先进入标题）。
 
 ### 通知占位符
 
@@ -322,7 +322,7 @@ mbedtls_md_free(&ctx);
 
 ### 邮件发送
 
-使用 ReadyMail 库的 SMTP 客户端。短信通知邮件为 **multipart/alternative**：同时发送纯文本（`msg.text.body()`）与 HTML 富文本（`msg.html.body()`），支持标题、加粗标签、换行与验证码高亮；不支持 HTML 的客户端自动回退到纯文本。
+使用 ReadyMail 库的 SMTP 客户端。短信通知与启动通知只生成 HTML 富文本，配置更新/管理员命令结果等简短通知用纯文本；`sendEmailNotification(subject, body, bodyType)` 的 `bodyType`（`MAIL_BODY_TEXT` / `MAIL_BODY_HTML`）决定写入 `msg.text` 还是 `msg.html`，另一部分不再生成，因此纯 HTML 邮件为 `text/html` 单部分；正文为空时直接跳过发送。
 
 ```cpp
 smtp.connect(server, port, callback);
@@ -331,19 +331,40 @@ SMTPMessage msg;
 msg.headers.add(rfc822_from, from);
 msg.headers.add(rfc822_to, to);
 msg.headers.add(rfc822_subject, subject);
-msg.text.body(body);            // 纯文本兜底
-msg.html.body(html);            // HTML 富文本（由 htmlEscape() 转义后拼接）
+if (bodyType == MAIL_BODY_HTML) msg.html.body(body);   // HTML 富文本（由 htmlEscape() 转义后拼接）
+else                            msg.text.body(body);   // 纯文本
 msg.timestamp = time(nullptr);
 smtp.send(msg);
 ```
 
 > 动态内容（发送者、名称、内容、验证码）需经 `htmlEscape()` 转义后再拼入 HTML，避免 `<`/`>`/`&` 破坏版式。
 
+### 网络超时（网络差时的行为）
+
+所有网络操作都有显式上界，避免一次阻塞把主循环冻死：
+
+| 常量 | 值 | 作用 |
+|---|---|---|
+| `HTTP_TIMEOUT_MS` | 8000 | 单次 HTTP 请求（连接 + 读写）上限，通过 `http.setTimeout()` 设置 |
+| `SMTP_SOCKET_TIMEOUT_MS` | 15000 | SMTP 单次 socket 读写上限 |
+| `NOTIFY_ATTEMPT_MAX` | 3 | 单步（单通道 / 单封邮件）最多尝试次数 |
+| `NOTIFY_MAX_WAIT_MS` | 120000 | WiFi 断开（或模组未就绪）时等待恢复的最长时间 |
+| `NOTIFY_JOB_DEADLINE_MS` | 180000 | 单条通知的整体时限，超时丢弃 |
+
+**SMTP 超时特别说明**：ReadyMail 库默认的读取超时高达 **120 秒**（`smtp_timeout.read`），且未暴露设置接口；
+服务器不响应时会把主循环整个卡住两分钟。库在认证完成后会把底层 socket 超时重设成这个值，
+因此 `emailAttemptOnce()` 在连接前和认证后各调用一次 `ssl_client.setTimeout(SMTP_SOCKET_TIMEOUT_MS)` 把它压回来。
+
+**弱网下的取舍**：超时取值偏宽容（HTTP 8s / SMTP 15s），宁可多等也不要动不动失败；
+同时用「总时限 180s + 队列深度 3」兜底——网络长时间不可用时旧通知会被丢弃，
+保证新短信仍能入队，而不是让队列被卡死的任务占满。
+
 ### 修改指南
 
 - **添加新推送通道**: 在 `PushType` 加枚举 → `isPushChannelValid()` 加校验 → `sendToChannel()` 加 case → Web UI 加选项
 - **修改钉钉/飞书签名逻辑**: 编辑 `dingtalkSign()` 或 `sendToChannel()` 中 FEISHU case
-- **更换 SMTP 库**: 只需修改 `sendEmailNotification()` 函数
+- **更换 SMTP 库**: 只需修改 `emailAttemptOnce()`（单次尝试）与 `sendEmailNotification()`（同步重试封装）
+- **新增异步通知类型**: 在 `task_types.h` 的 `NotifyJobType` / `NotifyStage` 加枚举 → `push.cpp` 加入队函数与 `processNotifyQueue()` 的阶段分支
 
 ---
 
@@ -411,10 +432,19 @@ checkSerial1URC() 循环:
   ├─ 第二个 ':'  → "13800138000"  (目标号码)
   └─ 剩余内容    → "你好世界"      (短信内容)
   │
-  └─ sendSMS("13800138000", "你好世界")
+  └─ notifyQueueAdminSms("13800138000", "你好世界", cmd)   ← 入队，立即返回
+       │
+       ▼ 队列内
+     sendSMS("13800138000", "你好世界")  →  结果写入 job.smsOk
+       │
+       ▼
+     邮件通知执行结果
 
 短信内容: "RESET"
-  └─ resetModule() + ESP.restart()
+  └─ notifyQueueReboot()   ← 入队，立即返回
+       │
+       ▼ 队列内
+     邮件"重启命令已执行"  →  resetModule() + ESP.restart()
 ```
 
 ### 修改指南

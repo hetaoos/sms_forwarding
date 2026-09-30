@@ -58,6 +58,8 @@ dev_doc/                  # 架构/API/模块详细文档（改代码前先读�
 - **新增推送通道**：在 PushType 枚举加类型 → push.cpp 的 sendToChannel() 加 case → config.cpp 的 isPushChannelValid() 加校验 → web_html.cpp 加 UI 选项。
 - 短信用 **PDU 模式**（中文短信必需），解析用 pdulib。
 - 主循环是单线程 Arduino 模型，HTTP 与 URC 处理均为非阻塞；避免在 loop 路径中引入长阻塞（模组初始化等慢操作已有异步化结构，见 task_types.h）。
+- **URC 回调里绝不做网络操作**：短信到达后只调 `notifyQueueSms()` 入队，真正的推送/邮件由 `loop()` 里的 `processNotifyQueue()` 分片执行（每轮最多一次网络请求，重试靠时间戳退避而非 delay）。管理员短信命令走 `notifyQueueAdminSms()`，RESET 走 `notifyQueueReboot()`。
+- **所有网络操作必须有超时上界**：HTTP 用 `http.setTimeout(HTTP_TIMEOUT_MS)`；SMTP 需在连接前与认证后各调一次 `ssl_client.setTimeout(SMTP_SOCKET_TIMEOUT_MS)`，否则 ReadyMail 默认的 120 秒读取超时会冻住主循环。单条通知另有 180 秒总时限，超时丢弃。
 - 启动时主动 `AT+CGACT=0,1` 禁用 4G 数据连接以省流量，勿移除。
 - Web UI 是单页应用（web_html.cpp 中字符串常量 + `%KEY%` 占位符），修改界面只动 web_html.cpp。
 

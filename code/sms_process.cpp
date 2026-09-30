@@ -242,37 +242,28 @@ void processAdminCommand(const char* sender, const char* text) {
       
       logCaptureLn(String("目标号码: " + targetPhone));
       logCaptureLn(String("短信内容: " + smsContent));
-      
-      bool success = sendSMS(targetPhone.c_str(), smsContent.c_str());
-      
-      // 发送邮件通知结果
-      String subject = success ? "短信发送成功" : "短信发送失败";
-      String body = "管理员命令执行结果:\n";
-      body += "命令: " + cmd + "\n";
-      body += "目标号码: " + targetPhone + "\n";
-      body += "短信内容: " + smsContent + "\n";
-      body += "执行结果: " + String(success ? "成功" : "失败");
-      
-      sendEmailNotification(subject.c_str(), body.c_str());
+
+      // 发短信（最长十几秒）与结果邮件都走异步队列：
+      // 本函数在 URC 回调中执行，必须立刻返回，否则会一直占着串口读取
+      if (!notifyQueueAdminSms(targetPhone.c_str(), smsContent.c_str(), cmd.c_str())) {
+        logCaptureLn(String("⚠️ 管理员短信命令未进入队列（队列已满）"));
+      }
     } else {
       logCaptureLn(String("SMS命令格式错误"));
-      sendEmailNotification("命令执行失败", "SMS命令格式错误，正确格式: SMS:号码:内容");
+      notifyQueueEmail("命令执行失败", "SMS命令格式错误，正确格式: SMS:号码:内容", MAIL_BODY_TEXT);
     }
   }
   // 处理 RESET 命令
   else if (cmd.equals("RESET")) {
     logCaptureLn(String("执行RESET命令"));
-    
-    // 先发送邮件通知（因为重启后就发不了了）
-    sendEmailNotification("重启命令已执行", "收到RESET命令，即将重启模组和ESP32...");
-    
-    // 重启模组
-    resetModule();
-    
-    // 重启ESP32
-    logCaptureLn(String("正在重启ESP32..."));
-    delay(1000);
-    ESP.restart();
+
+    // 重启同样交给队列：先发通知邮件（发不出也会在超时后继续），再重启模组与 ESP32
+    if (!notifyQueueReboot()) {
+      logCaptureLn(String("⚠️ 重启命令未进入队列，改为立即重启"));
+      resetModule();
+      delay(1000);
+      ESP.restart();
+    }
   }
   else {
     logCaptureLn(String("未知命令: " + cmd));
@@ -307,59 +298,12 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
     }
   }
 
-  // 解析发送者名称与验证码
-  String senderName, verifyCode;
-  parseSmsMeta(text, senderName, verifyCode);
-
-  // 发送通知http（推送到所有启用的通道）
-  sendSMSToServer(sender, text, timestamp, senderName.c_str(), verifyCode.c_str());
-  // 发送通知邮件（标题/正文带入发送者名称与验证码，参考 send_notification.sh）
-  String subject;
-  if (verifyCode.length() > 0) {
-    subject = "验证码: " + verifyCode + " 来自 " + (senderName.length() > 0 ? senderName : String(sender));
-  } else if (senderName.length() > 0) {
-    subject = "来自 " + senderName + " 的短信";
-  } else {
-    subject = "来自 " + String(sender) + " 的短信";
+  // 推送与邮件都是网络慢操作（单条最坏可达数十秒），这里只入队、立即返回，
+  // 真正的发送由 loop() 里的 processNotifyQueue() 分片推进；
+  // 邮件标题/HTML 正文（含验证码、发件人名称）在发送阶段由 push.cpp 构建。
+  if (!notifyQueueSms(sender, text, timestamp)) {
+    logCaptureLn(String("⚠️ 本次短信未进入通知队列（队列已满或未配置任何出口）"));
   }
-  String body = "来自：" + String(sender);
-  if (senderName.length() > 0) body += " (" + senderName + ")";
-  body += "，时间：" + String(timestamp) + "，内容：" + String(text);
-  if (verifyCode.length() > 0) body += "，验证码：" + verifyCode;
-
-  // 富文本（HTML）正文：卡片式布局，渐变标题栏 + 验证码高亮块 + 表格字段
-  String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
-  html += "<div style=\"max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
-
-  // 头部标题栏
-  html += "<div style=\"background:#2f6fed;background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
-  html += "<span style=\"font-size:17px;font-weight:600;\">📱 " + htmlEscape(subject) + "</span>";
-  html += "</div>";
-
-  // 验证码高亮块
-  if (verifyCode.length() > 0) {
-    html += "<div style=\"margin:16px 20px 0;background:#fff4f4;border:1px solid #ffd0d0;border-radius:8px;padding:12px 16px;text-align:center;\">";
-    html += "<div style=\"font-size:12px;color:#c0392b;letter-spacing:2px;\">验证码</div>";
-    html += "<div style=\"font-size:28px;font-weight:700;color:#d00;letter-spacing:5px;margin-top:2px;\">" + htmlEscape(verifyCode) + "</div>";
-    html += "</div>";
-  }
-
-  // 信息字段（表格）
-  html += "<div style=\"padding:16px 20px;\">";
-  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
-  html += "<tr><td style=\"padding:8px 0;width:64px;color:#888;vertical-align:top;\">发件人</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(sender));
-  if (senderName.length() > 0) html += " <span style=\"color:#2f6fed;\">(" + htmlEscape(senderName) + ")</span>";
-  html += "</td></tr>";
-  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(timestamp)) + "</td></tr>";
-  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">内容</td><td style=\"padding:8px 0;word-break:break-word;\">" + htmlEscape(String(text)) + "</td></tr>";
-  html += "</table></div>";
-
-  // 底部标识
-  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;\">SMS Forwarder · 短信转发通知</div>";
-
-  html += "</div></div>";
-
-  sendEmailNotification(subject.c_str(), body.c_str(), html.c_str());
 }
 
 // URC 接收状态机（跨调用保持）

@@ -3,16 +3,94 @@
 #include "config.h"
 #include "web_handlers.h"
 #include "modem.h"
+#include "task_types.h"
 #include <HTTPClient.h>
 #include <mbedtls/md.h>
 #include <base64.h>
 #include <sys/time.h>
 
-// 发送邮件通知函数（带重试）
-void sendEmailNotification(const char* subject, const char* body, const char* html) {
-  if (config.smtpServer.length() == 0 || config.smtpUser.length() == 0 || 
-      config.smtpPass.length() == 0 || config.smtpSendTo.length() == 0) {
+// 邮件配置是否完整
+static bool emailConfigured() {
+  return config.smtpServer.length() > 0 && config.smtpUser.length() > 0 &&
+         config.smtpPass.length() > 0 && config.smtpSendTo.length() > 0;
+}
+
+// ---- 网络超时 ----
+// 取值原则：网络差时要足够宽容（宁可多等一会也不要动不动失败），
+// 但必须有硬上界，否则一次阻塞就能把主循环冻死。
+#define HTTP_TIMEOUT_MS          8000   // 单次 HTTP 请求（连接 + 读写）上限
+#define SMTP_SOCKET_TIMEOUT_MS  15000   // SMTP 单次 socket 读写上限
+                                        // ReadyMail 默认 read 超时高达 120 秒，服务器不响应时会
+                                        // 把整个主循环卡死两分钟；库未暴露该选项，
+                                        // 只能在它重设之后再次覆盖底层 socket 超时。
+#define NOTIFY_JOB_DEADLINE_MS  180000UL // 单条通知的整体时限，超时丢弃，避免弱网时长期占住队列
+
+// 覆盖底层 socket 超时（ReadyMail 在认证后会把超时重设为 120 秒，需要再次压回来）
+static void applySmtpSocketTimeout() {
+  ssl_client.setTimeout(SMTP_SOCKET_TIMEOUT_MS);
+}
+
+// 单次邮件发送尝试（不含重试与退避）。
+// 同步发送（sendEmailNotification）与异步队列共用它，队列靠返回值决定出队还是退避重试。
+static NotifyStep emailAttemptOnce(const char* subject, const char* body, MailBodyType bodyType) {
+  auto statusCallback = [](SMTPStatus status) {
+    logCaptureLn(String(status.text));
+  };
+
+  // 清理上一次尝试的残留连接状态，确保每次从干净状态开始
+  smtp.stop();
+  applySmtpSocketTimeout();   // 连接与 TLS 握手阶段的读写上限
+
+  if (!smtp.connect(config.smtpServer.c_str(), config.smtpPort, statusCallback)) {
+    logCaptureLn(String("邮件服务器连接失败"));
+    return STEP_RETRY;
+  }
+
+  if (!smtp.authenticate(config.smtpUser.c_str(), config.smtpPass.c_str(), readymail_auth_password)) {
+    // 认证失败属配置错误，重试无意义
+    logCaptureLn(String("邮件认证失败（请检查账号与SMTP授权码），停止重试"));
+    smtp.stop();
+    return STEP_FAILED;
+  }
+
+  // 认证完成后库会把 socket 超时改成它自己的 120 秒，这里压回我们的上限
+  applySmtpSocketTimeout();
+
+  SMTPMessage msg;
+  String from = "SMS Notification <"; from += config.smtpUser; from += ">";
+  msg.headers.add(rfc822_from, from.c_str());
+  String to = "your_email <"; to += config.smtpSendTo; to += ">";
+  msg.headers.add(rfc822_to, to.c_str());
+  msg.headers.add(rfc822_subject, subject);
+  // 按 bodyType 只写入一种正文：纯 HTML 时邮件为 text/html 单部分
+  if (bodyType == MAIL_BODY_HTML) {
+    msg.html.body(body);
+  } else {
+    msg.text.body(body);
+  }
+  msg.timestamp = time(nullptr);
+
+  if (smtp.send(msg)) {
+    logCaptureLn(String("[邮件] 发送成功"));
+    smtp.stop();
+    return STEP_OK;
+  }
+  logCaptureLn(String("邮件发送失败"));
+  smtp.stop();
+  return STEP_RETRY;
+}
+
+// 发送邮件通知函数（带重试，同步阻塞）
+// 注意：本函数会一直占用主循环，仅用于「必须立刻发出」的场景（如重启前的通知）。
+// 短信转发等常规通知必须走 notifyQueueSms()/notifyQueueEmail()，由主循环分片执行。
+void sendEmailNotification(const char* subject, const char* body, MailBodyType bodyType) {
+  if (!emailConfigured()) {
     logCaptureLn(String("邮件配置不完整，跳过发送"));
+    return;
+  }
+
+  if (!body || strlen(body) == 0) {
+    logCaptureLn(String("邮件正文为空，跳过发送"));
     return;
   }
 
@@ -21,10 +99,6 @@ void sendEmailNotification(const char* subject, const char* body, const char* ht
     return;
   }
 
-  auto statusCallback = [](SMTPStatus status) {
-    logCaptureLn(String(status.text));
-  };
-
   const int MAX_ATTEMPTS = 3; // 总尝试次数（含首次）
   for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     if (attempt > 1) {
@@ -32,39 +106,8 @@ void sendEmailNotification(const char* subject, const char* body, const char* ht
       logCaptureF("[邮件] 重试 (%d/%d)...\n", attempt, MAX_ATTEMPTS);
     }
 
-    // 清理上一次尝试的残留连接状态，确保每次从干净状态开始
-    smtp.stop();
-
-    if (!smtp.connect(config.smtpServer.c_str(), config.smtpPort, statusCallback)) {
-      logCaptureLn(String("邮件服务器连接失败"));
-      continue;
-    }
-
-    if (!smtp.authenticate(config.smtpUser.c_str(), config.smtpPass.c_str(), readymail_auth_password)) {
-      // 认证失败属配置错误，重试无意义
-      logCaptureLn(String("邮件认证失败（请检查账号与SMTP授权码），停止重试"));
-      smtp.stop();
-      return;
-    }
-
-    SMTPMessage msg;
-    String from = "SMS Notification <"; from += config.smtpUser; from += ">";
-    msg.headers.add(rfc822_from, from.c_str());
-    String to = "your_email <"; to += config.smtpSendTo; to += ">";
-    msg.headers.add(rfc822_to, to.c_str());
-    msg.headers.add(rfc822_subject, subject);
-    msg.text.body(body);
-    if (html && strlen(html) > 0) {
-      msg.html.body(html);
-    }
-    msg.timestamp = time(nullptr);
-
-    if (smtp.send(msg)) {
-      logCaptureF("[邮件] 发送成功（第 %d/%d 次尝试）\n", attempt, MAX_ATTEMPTS);
-      smtp.stop();
-      return;
-    }
-    logCaptureLn(String("邮件发送失败"));
+    NotifyStep r = emailAttemptOnce(subject, body, bodyType);
+    if (r == STEP_OK || r == STEP_FAILED) return;
   }
 
   logCaptureLn(String("邮件多次重试后仍失败，本次通知已丢弃"));
@@ -78,7 +121,7 @@ static String startupRow(const String& key, const String& val) {
 }
 
 // 发送"设备已启动"通知邮件：在模组初始化完成后调用，
-// 收集设备/模组/信号/号码等信息，以 HTML 富文本 + 纯文本双格式发送
+// 收集设备/模组/信号/号码等信息，以 HTML 富文本发送（不再额外生成纯文本正文）
 void sendStartupEmail() {
   if (config.smtpServer.length() == 0 || config.smtpUser.length() == 0 ||
       config.smtpPass.length() == 0 || config.smtpSendTo.length() == 0) {
@@ -136,19 +179,6 @@ void sendStartupEmail() {
     if (isPushChannelValid(config.pushChannels[i])) enabledChannels++;
   }
   String channelSummary = String(enabledChannels) + " 个已启用 / 共 " + String(MAX_PUSH_CHANNELS) + " 个";
-
-  // ---- 纯文本正文（兼容不渲染 HTML 的客户端） ----
-  String body = "短信转发器已启动\n";
-  body += "设备地址: " + deviceUrl + "\n";
-  body += "IP地址: " + ip + "\n";
-  body += "WiFi信号: " + String(wifiRssi) + " dBm\n";
-  body += "系统时间: " + timeStr + "\n";
-  body += "模组初始化: " + initStatus + "（" + netStatus + "）\n";
-  body += "模组信息: " + manufacturer + " / " + model + " / " + version + "\n";
-  body += "信号状态: 评级 " + sigQuality + "，RSRP " + rsrpStr + "，RSRQ " + rsrqStr + "，RSSI " + rssiStr + "\n";
-  body += "本机号码: " + ownNumber + "\n";
-  body += "管理员号码: " + adminNumber + "\n";
-  body += "推送通道: " + channelSummary + "\n";
 
   // ---- HTML 富文本正文 ----
   String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
@@ -211,7 +241,7 @@ void sendStartupEmail() {
   html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;margin-top:12px;\">SMS Forwarder · 短信转发通知</div>";
   html += "</div></div>";
 
-  sendEmailNotification("短信转发器已启动", body.c_str(), html.c_str());
+  sendEmailNotification("短信转发器已启动", html.c_str(), MAIL_BODY_HTML);
 }
 
 // URL编码辅助函数
@@ -378,19 +408,22 @@ static bool isBodySuccess(const PushChannel& channel, const String& resp) {
   }
 }
 
-// 带重试地执行单个通道的 HTTP 请求（最多 3 次，失败后退避重试）
-static bool executeChannelRequest(const PushChannel& channel, const String& url,
-                                  bool isGet, const String& contentType, const String& body,
-                                  const String& channelName) {
-  const int MAX_ATTEMPTS = 3;
-  for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+// 执行单个通道的 HTTP 请求。
+// maxAttempts=1 时只发一次请求、不做退避 delay，供异步队列在主循环里分片调用：
+// 每次 processNotifyQueue() 只推进一次网络请求，退避交给队列的时间戳调度完成。
+static NotifyStep executeChannelRequest(const PushChannel& channel, const String& url,
+                                        bool isGet, const String& contentType, const String& body,
+                                        const String& channelName, int maxAttempts) {
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1) {
       delay(500 * (attempt - 1)); // 退避：第2次前等0.5秒，第3次前等1秒
-      logCaptureF("[%s] 重试 (%d/%d)...\n", channelName.c_str(), attempt, MAX_ATTEMPTS);
+      logCaptureF("[%s] 重试 (%d/%d)...\n", channelName.c_str(), attempt, maxAttempts);
     }
 
     HTTPClient http;
     http.begin(url);
+    // 显式设置超时：默认行为在网络差时可能长时间不返回，把主循环整个拖住
+    http.setTimeout(HTTP_TIMEOUT_MS);
     if (!isGet) http.addHeader("Content-Type", contentType);
     int httpCode = isGet ? http.GET() : http.POST(body);
 
@@ -404,10 +437,10 @@ static bool executeChannelRequest(const PushChannel& channel, const String& url,
       if (httpOk) resp = http.getString();
 
       if (httpOk && isBodySuccess(channel, resp)) {
-        logCaptureF("[%s] 推送成功（第 %d/%d 次尝试）\n", channelName.c_str(), attempt, MAX_ATTEMPTS);
+        logCaptureF("[%s] 推送成功（第 %d/%d 次尝试）\n", channelName.c_str(), attempt, maxAttempts);
         if (resp.length() > 0) logCaptureLn(String("响应: " + resp));
         http.end();
-        return true;
+        return STEP_OK;
       }
 
       if (resp.length() > 0) logCaptureLn(String("响应: " + resp));
@@ -416,7 +449,7 @@ static bool executeChannelRequest(const PushChannel& channel, const String& url,
       if (httpCode >= 400 && httpCode < 500 && httpCode != 429) {
         logCaptureF("[%s] 客户端错误 %d，跳过重试\n", channelName.c_str(), httpCode);
         http.end();
-        return false;
+        return STEP_FAILED;
       }
       logCaptureLn(String("[" + channelName + "] 本次推送未确认成功"));
     }
@@ -424,19 +457,20 @@ static bool executeChannelRequest(const PushChannel& channel, const String& url,
   }
 
   logCaptureLn(String("[" + channelName + "] 多次重试后仍失败"));
-  return false;
+  return STEP_RETRY;
 }
 
-// 发送单个推送通道（统一构建请求参数，由 executeChannelRequest 执行并自动重试）
-void sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp,
-                   const char* senderName, const char* verifyCode) {
-  if (!channel.enabled) return;
+// 发送单个推送通道（统一构建请求参数，由 executeChannelRequest 执行）
+// 返回本次结果，便于异步队列判断是否需要退避重试。
+NotifyStep sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp,
+                         const char* senderName, const char* verifyCode, int maxAttempts) {
+  if (!channel.enabled) return STEP_OK;   // 未启用：直接算作这一步完成
 
   // 对于某些推送方式，URL可以为空（使用默认URL）
   bool needUrl = (channel.type == PUSH_TYPE_POST_JSON || channel.type == PUSH_TYPE_BARK ||
                   channel.type == PUSH_TYPE_GET || channel.type == PUSH_TYPE_DINGTALK ||
                   channel.type == PUSH_TYPE_CUSTOM);
-  if (needUrl && channel.url.length() == 0) return;
+  if (needUrl && channel.url.length() == 0) return STEP_OK;
 
   String channelName = channel.name.length() > 0 ? channel.name : ("通道" + String(channel.type));
   logCaptureLn(String("发送到推送通道: " + channelName));
@@ -587,7 +621,7 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       // 自定义模板
       if (channel.customBody.length() == 0) {
         logCaptureLn(String("自定义模板为空，跳过"));
-        return;
+        return STEP_OK;
       }
       reqUrl = channel.url;
       reqBody = channel.customBody;
@@ -674,39 +708,378 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
 
     default:
       logCaptureLn(String("未知推送类型"));
-      return;
+      return STEP_OK;
   }
 
-  executeChannelRequest(channel, reqUrl, useGet, reqContentType, reqBody, channelName);
+  return executeChannelRequest(channel, reqUrl, useGet, reqContentType, reqBody, channelName, maxAttempts);
 }
 
-// 发送短信到所有启用的推送通道
-void sendSMSToServer(const char* sender, const char* message, const char* timestamp,
-                     const char* senderName, const char* verifyCode) {
+// ===================== 异步通知队列 =====================
+// 短信到达时（URC 回调）只把通知排进队列，真正耗时的推送/发邮件由 loop() 分片推进。
+// 这样一条短信最多让主循环停顿一次网络请求的时长，而不是把 Web、URC、看门狗全部冻住。
+
+static NotifyJob notifyQueue[NOTIFY_QUEUE_SIZE];
+static uint8_t notifyHead = 0;
+static uint8_t notifyTail = 0;
+static uint8_t notifyCount = 0;
+
+#define NOTIFY_ATTEMPT_MAX      3        // 单个步骤（单个通道/单封邮件）的最大尝试次数
+#define NOTIFY_MAX_WAIT_MS      120000UL // WiFi 断开时，通知最多等待重连的时间，超时丢弃
+
+// 安全拷贝字符串到定长字段（保证以 '\0' 结尾，超长部分截断）
+static void copyField(char* dst, const char* src, size_t size) {
+  if (size == 0) return;
+  if (!src) { dst[0] = '\0'; return; }
+  strncpy(dst, src, size - 1);
+  dst[size - 1] = '\0';
+}
+
+// 入队一条"短信转发"通知：先推送所有启用通道，再发邮件
+bool notifyQueueSms(const char* sender, const char* message, const char* timestamp) {
   if (WiFi.status() != WL_CONNECTED) {
-    logCaptureLn(String("WiFi未连接，跳过推送"));
+    // 仍然入队：队列会等待 WiFi 恢复（最多 NOTIFY_MAX_WAIT_MS）再发送
+    logCaptureLn(String("WiFi未连接，通知先入队，待恢复连接后发送"));
+  }
+  // 先判断是否有可用的出口（推送通道或邮件），都没有就没必要占用队列
+  bool hasChannel = false;
+  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
+    if (isPushChannelValid(config.pushChannels[i])) { hasChannel = true; break; }
+  }
+  if (!hasChannel && !emailConfigured()) {
+    logCaptureLn(String("没有启用的推送通道且邮件未配置，跳过本次通知"));
+    return false;
+  }
+
+  size_t msgLen = message ? strlen(message) : 0;
+  if (msgLen == 0) {
+    logCaptureLn(String("短信内容为空，跳过本次通知"));
+    return false;
+  }
+
+  // 先占位检查队列余量，避免截断后才发现队列已满
+  if (notifyCount >= NOTIFY_QUEUE_SIZE) {
+    logCaptureLn(String("⚠️ 通知队列已满，本次短信未入队"));
+    return false;
+  }
+
+  NotifyJob& job = notifyQueue[notifyTail];
+  memset(&job, 0, sizeof(job));
+  job.type = NOTIFY_JOB_SMS_PUSH;
+  job.stage = NOTIFY_STAGE_PUSH;
+  job.enqueuedAt = millis();
+  copyField(job.sender, sender, NOTIFY_SENDER_SIZE);
+  copyField(job.timestamp, timestamp, NOTIFY_TIMESTAMP_SIZE);
+  copyField(job.message, message, NOTIFY_MESSAGE_SIZE);
+  if (msgLen >= NOTIFY_MESSAGE_SIZE) {
+    logCaptureLn(String("⚠️ 短信内容过长，已截断到 " + String(NOTIFY_MESSAGE_SIZE - 1) + " 字节"));
+  }
+
+  notifyTail = (notifyTail + 1) % NOTIFY_QUEUE_SIZE;
+  notifyCount++;
+  logCaptureF("已入队短信转发通知（队列 %d/%d）\n", notifyCount, NOTIFY_QUEUE_SIZE);
+  return true;
+}
+
+// 入队一封邮件（正文已构建好）
+bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType) {
+  if (!emailConfigured()) {
+    logCaptureLn(String("邮件配置不完整，跳过邮件入队"));
+    return false;
+  }
+  if (!body || strlen(body) == 0) {
+    logCaptureLn(String("邮件正文为空，跳过邮件入队"));
+    return false;
+  }
+  if (notifyCount >= NOTIFY_QUEUE_SIZE) {
+    logCaptureLn(String("⚠️ 通知队列已满，本次邮件未入队"));
+    return false;
+  }
+
+  NotifyJob& job = notifyQueue[notifyTail];
+  memset(&job, 0, sizeof(job));
+  job.type = NOTIFY_JOB_EMAIL;
+  job.stage = NOTIFY_STAGE_EMAIL;   // 邮件任务直接进入发信阶段
+  job.bodyType = (uint8_t)bodyType;
+  job.enqueuedAt = millis();
+  copyField(job.subject, subject, NOTIFY_SUBJECT_SIZE);
+  copyField(job.body, body, NOTIFY_BODY_SIZE);
+  if (strlen(body) >= NOTIFY_BODY_SIZE) {
+    logCaptureLn(String("⚠️ 邮件正文过长，已截断到 " + String(NOTIFY_BODY_SIZE - 1) + " 字节"));
+  }
+
+  notifyTail = (notifyTail + 1) % NOTIFY_QUEUE_SIZE;
+  notifyCount++;
+  logCaptureF("已入队邮件通知（队列 %d/%d）\n", notifyCount, NOTIFY_QUEUE_SIZE);
+  return true;
+}
+
+// 入队"管理员 SMS 命令"：先经模组发短信，再把执行结果发邮件
+bool notifyQueueAdminSms(const char* targetPhone, const char* content, const char* cmdText) {
+  if (!targetPhone || strlen(targetPhone) == 0 || !content || strlen(content) == 0) {
+    logCaptureLn(String("管理员短信命令参数不完整，跳过入队"));
+    return false;
+  }
+  if (notifyCount >= NOTIFY_QUEUE_SIZE) {
+    logCaptureLn(String("⚠️ 通知队列已满，管理员短信命令未入队"));
+    return false;
+  }
+
+  NotifyJob& job = notifyQueue[notifyTail];
+  memset(&job, 0, sizeof(job));
+  job.type = NOTIFY_JOB_SMS_COMMAND;
+  job.stage = NOTIFY_STAGE_SMS;
+  job.enqueuedAt = millis();
+  copyField(job.sender, targetPhone, NOTIFY_SENDER_SIZE);      // 复用 sender 存目标号码
+  copyField(job.message, content, NOTIFY_MESSAGE_SIZE);        // 短信正文
+  // 邮件正文：命令回显，执行结果在短信发出后追加
+  String body = "管理员命令执行结果:\n";
+  body += "命令: " + String(cmdText ? cmdText : "") + "\n";
+  body += "目标号码: " + String(targetPhone) + "\n";
+  body += "短信内容: " + String(content);
+  copyField(job.body, body.c_str(), NOTIFY_BODY_SIZE);
+
+  notifyTail = (notifyTail + 1) % NOTIFY_QUEUE_SIZE;
+  notifyCount++;
+  logCaptureF("已入队管理员短信命令（队列 %d/%d）\n", notifyCount, NOTIFY_QUEUE_SIZE);
+  return true;
+}
+
+// 入队"管理员 RESET 命令"：先发通知邮件，再重启模组与 ESP32
+bool notifyQueueReboot() {
+  if (notifyCount >= NOTIFY_QUEUE_SIZE) {
+    logCaptureLn(String("⚠️ 通知队列已满，重启命令未入队"));
+    return false;
+  }
+
+  NotifyJob& job = notifyQueue[notifyTail];
+  memset(&job, 0, sizeof(job));
+  job.type = NOTIFY_JOB_REBOOT;
+  job.stage = NOTIFY_STAGE_EMAIL;      // 先发邮件，发完（或超时）再重启
+  job.bodyType = (uint8_t)MAIL_BODY_TEXT;
+  job.enqueuedAt = millis();
+  copyField(job.subject, "重启命令已执行", NOTIFY_SUBJECT_SIZE);
+  copyField(job.body, "收到RESET命令，即将重启模组和ESP32...", NOTIFY_BODY_SIZE);
+
+  notifyTail = (notifyTail + 1) % NOTIFY_QUEUE_SIZE;
+  notifyCount++;
+  logCaptureLn(String("已入队重启命令，通知邮件发出后将重启设备"));
+  return true;
+}
+
+int notifyQueueCount() {
+  return notifyCount;
+}
+
+static void notifyDequeue() {
+  notifyHead = (notifyHead + 1) % NOTIFY_QUEUE_SIZE;
+  notifyCount--;
+}
+
+// 构建短信转发邮件的主题与 HTML 正文（发送时才构建，避免占用队列内存）
+static void buildSmsMail(const char* sender, const char* message, const char* timestamp,
+                        String& subject, String& html) {
+  String senderName, verifyCode;
+  parseSmsMeta(String(message), senderName, verifyCode);
+
+  // 标题（验证码优先，参考 send_notification.sh）
+  if (verifyCode.length() > 0) {
+    subject = "验证码: " + verifyCode + " 来自 " + (senderName.length() > 0 ? senderName : String(sender));
+  } else if (senderName.length() > 0) {
+    subject = "来自 " + senderName + " 的短信";
+  } else {
+    subject = "来自 " + String(sender) + " 的短信";
+  }
+
+  // 富文本（HTML）正文：卡片式布局，渐变标题栏 + 验证码高亮块 + 表格字段
+  html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
+  html += "<div style=\"max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
+
+  // 头部标题栏
+  html += "<div style=\"background:#2f6fed;background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
+  html += "<span style=\"font-size:17px;font-weight:600;\">📱 " + htmlEscape(subject) + "</span>";
+  html += "</div>";
+
+  // 验证码高亮块
+  if (verifyCode.length() > 0) {
+    html += "<div style=\"margin:16px 20px 0;background:#fff4f4;border:1px solid #ffd0d0;border-radius:8px;padding:12px 16px;text-align:center;\">";
+    html += "<div style=\"font-size:12px;color:#c0392b;letter-spacing:2px;\">验证码</div>";
+    html += "<div style=\"font-size:28px;font-weight:700;color:#d00;letter-spacing:5px;margin-top:2px;\">" + htmlEscape(verifyCode) + "</div>";
+    html += "</div>";
+  }
+
+  // 信息字段（表格）
+  html += "<div style=\"padding:16px 20px;\">";
+  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  html += "<tr><td style=\"padding:8px 0;width:64px;color:#888;vertical-align:top;\">发件人</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(sender));
+  if (senderName.length() > 0) html += " <span style=\"color:#2f6fed;\">(" + htmlEscape(senderName) + ")</span>";
+  html += "</td></tr>";
+  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(timestamp)) + "</td></tr>";
+  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">内容</td><td style=\"padding:8px 0;word-break:break-word;\">" + htmlEscape(String(message)) + "</td></tr>";
+  html += "</table></div>";
+
+  // 底部标识
+  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;\">SMS Forwarder · 短信转发通知</div>";
+
+  html += "</div></div>";
+}
+
+// 推进队首任务的一小步：发出一次网络请求后立刻返回
+void processNotifyQueue() {
+  if (notifyCount == 0) return;
+
+  NotifyJob& job = notifyQueue[notifyHead];
+
+  // 邮件已处理完，执行重启（此分支不返回）
+  if (job.type == NOTIFY_JOB_REBOOT && job.stage == NOTIFY_STAGE_REBOOT) {
+    logCaptureLn(String("正在硬重启模组..."));
+    resetModule();
+    logCaptureLn(String("正在重启ESP32..."));
+    delay(1000);
+    ESP.restart();
+    return;   // 正常不会走到这里
+  }
+
+  // 整体时限：网络状况差时不再无限重试，超时丢弃，保证后续短信还能进队列
+  if (millis() - job.enqueuedAt >= NOTIFY_JOB_DEADLINE_MS) {
+    if (job.type == NOTIFY_JOB_REBOOT) {
+      // 重启命令即使邮件发不出去也要执行重启，只是不再等邮件
+      logCaptureLn(String("⚠️ 重启通知邮件超时未发出，直接执行重启"));
+      job.stage = NOTIFY_STAGE_REBOOT;
+    } else {
+      logCaptureLn(String("⚠️ 通知超时未发出（网络状况差），已丢弃"));
+      notifyDequeue();
+    }
     return;
   }
-  
-  bool hasEnabledChannel = false;
-  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
-    if (isPushChannelValid(config.pushChannels[i])) {
-      hasEnabledChannel = true;
-      break;
+
+  // 只有推送与邮件阶段需要网络；模组发短信、重启阶段不受 WiFi 状态影响
+  bool needsWifi = (job.stage == NOTIFY_STAGE_PUSH || job.stage == NOTIFY_STAGE_EMAIL);
+
+  // WiFi 断开时保留队列等待重连，超时后才丢弃（避免短暂断网就丢通知）
+  if (needsWifi && WiFi.status() != WL_CONNECTED) {
+    if (millis() - job.enqueuedAt >= NOTIFY_MAX_WAIT_MS) {
+      logCaptureLn(String("⚠️ WiFi长时间未连接，丢弃 1 条待发通知"));
+      notifyDequeue();
     }
-  }
-  
-  if (!hasEnabledChannel) {
-    logCaptureLn(String("没有启用的推送通道"));
     return;
   }
-  
-  logCaptureLn(String("\n=== 开始多通道推送 ==="));
-  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
-    if (isPushChannelValid(config.pushChannels[i])) {
-      sendToChannel(config.pushChannels[i], sender, message, timestamp, senderName, verifyCode);
-      delay(100); // 短暂延迟避免请求过快
+
+  // 退避等待：还没到重试时刻就直接返回，把时间让给主循环
+  if (job.nextAttemptAt != 0 && (long)(millis() - job.nextAttemptAt) < 0) return;
+
+  // ---- 管理员短信命令：先用模组发短信（不占用网络） ----
+  if (job.type == NOTIFY_JOB_SMS_COMMAND && job.stage == NOTIFY_STAGE_SMS) {
+    if (!modemReady) {
+      // 模组未就绪时等待恢复，等太久就按失败处理并发出结果邮件
+      if (millis() - job.enqueuedAt >= NOTIFY_MAX_WAIT_MS) {
+        logCaptureLn(String("⚠️ 模组长时间未就绪，管理员短信按失败处理"));
+        job.smsOk = 0;
+        job.stage = NOTIFY_STAGE_EMAIL;
+        job.attempt = 0;
+        job.nextAttemptAt = 0;
+      }
+      return;
     }
+    if (modemBusy()) return;   // 模组正在初始化/发上一条短信，下一轮再试
+
+    logCaptureLn(String("队列执行管理员短信命令"));
+    bool ok = sendSMS(job.sender, job.message);
+    job.smsOk = ok ? 1 : 0;
+    job.stage = NOTIFY_STAGE_EMAIL;
+    job.attempt = 0;
+    job.nextAttemptAt = 0;
+    logCaptureLn(String(ok ? "管理员短信发送成功" : "管理员短信发送失败"));
+    return;   // 结果邮件下一轮再发，避免一次调用里连续做两件慢事
   }
-  logCaptureLn(String("=== 多通道推送完成 ===\n"));
+
+  NotifyStep result = STEP_RETRY;
+
+  if (job.type == NOTIFY_JOB_SMS_PUSH && job.stage == NOTIFY_STAGE_PUSH) {
+    // 跳过未启用/配置无效的通道
+    while (job.channelIdx < MAX_PUSH_CHANNELS &&
+           !isPushChannelValid(config.pushChannels[job.channelIdx])) {
+      job.channelIdx++;
+    }
+    if (job.channelIdx >= MAX_PUSH_CHANNELS) {
+      // 推送阶段结束，下一轮进入邮件阶段
+      job.stage = NOTIFY_STAGE_EMAIL;
+      job.attempt = 0;
+      job.nextAttemptAt = 0;
+      return;
+    }
+
+    const PushChannel& ch = config.pushChannels[job.channelIdx];
+    String senderName, verifyCode;
+    parseSmsMeta(String(job.message), senderName, verifyCode);
+    result = sendToChannel(ch, job.sender, job.message, job.timestamp,
+                           senderName.c_str(), verifyCode.c_str(), 1);
+
+    job.attempt++;
+    if (result == STEP_OK || result == STEP_FAILED || job.attempt >= NOTIFY_ATTEMPT_MAX) {
+      job.channelIdx++;      // 该通道结束（成功 / 无需重试 / 重试次数用尽）
+      job.attempt = 0;
+      job.nextAttemptAt = 0;
+    } else {
+      // 退避后重试同一通道：0.5s、1s
+      job.nextAttemptAt = millis() + 500UL * job.attempt;
+    }
+    return;
+  }
+
+  // ---- 邮件阶段 ----
+  if (job.type == NOTIFY_JOB_SMS_PUSH) {
+    if (!emailConfigured()) {   // 未配置邮件：短信只推送即可
+      notifyDequeue();
+      return;
+    }
+    String subject, html;
+    buildSmsMail(job.sender, job.message, job.timestamp, subject, html);
+    result = emailAttemptOnce(subject.c_str(), html.c_str(), MAIL_BODY_HTML);
+  } else if (job.type == NOTIFY_JOB_SMS_COMMAND) {
+    if (!emailConfigured()) {   // 未配置邮件：短信已发出，无结果邮件可发
+      notifyDequeue();
+      return;
+    }
+    String subject = job.smsOk ? "短信发送成功" : "短信发送失败";
+    String body = String(job.body) + "\n执行结果: " + (job.smsOk ? "成功" : "失败");
+    result = emailAttemptOnce(subject.c_str(), body.c_str(), MAIL_BODY_TEXT);
+  } else {
+    if (!emailConfigured()) {
+      // 重启命令不依赖邮件，直接进入重启阶段
+      if (job.type == NOTIFY_JOB_REBOOT) {
+        job.stage = NOTIFY_STAGE_REBOOT;
+        return;
+      }
+      notifyDequeue();
+      return;
+    }
+    result = emailAttemptOnce(job.subject, job.body, (MailBodyType)job.bodyType);
+  }
+
+  job.attempt++;
+  bool mailDone = (result == STEP_OK || result == STEP_FAILED || job.attempt >= NOTIFY_ATTEMPT_MAX);
+
+  if (job.type == NOTIFY_JOB_REBOOT) {
+    // 重启命令：邮件处理完（成功或放弃）后转入重启阶段
+    if (mailDone) {
+      job.stage = NOTIFY_STAGE_REBOOT;
+      job.attempt = 0;
+      job.nextAttemptAt = 0;
+    } else {
+      job.nextAttemptAt = millis() + 1000UL * job.attempt;   // 退避后重试：1s、2s
+    }
+    return;
+  }
+
+  if (result == STEP_OK) {
+    notifyDequeue();
+    return;
+  }
+  if (mailDone) {
+    logCaptureLn(String("⚠️ 通知多次重试后仍失败，已丢弃"));
+    notifyDequeue();
+    return;
+  }
+  // 退避后重试：1s、2s
+  job.nextAttemptAt = millis() + 1000UL * job.attempt;
 }

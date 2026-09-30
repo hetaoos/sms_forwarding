@@ -939,12 +939,12 @@ void handleSave() {
 )rawliteral";
   server.send(200, "text/html", html);
   
-  // 如果配置有效，发送启动通知
+  // 如果配置有效，发送启动通知（走异步队列，避免保存配置时卡住 HTTP 响应）
   if (configValid) {
     logCaptureLn(String("配置有效，发送启动通知..."));
     String subject = "短信转发器配置已更新";
     String body = "设备配置已更新\n设备地址: " + getDeviceUrl();
-    sendEmailNotification(subject.c_str(), body.c_str());
+    notifyQueueEmail(subject.c_str(), body.c_str(), MAIL_BODY_TEXT);
   }
 }
 

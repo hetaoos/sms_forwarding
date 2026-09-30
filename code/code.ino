@@ -123,4 +123,7 @@ void loop() {
   modemAutoRecover();
   if (Serial.available()) Serial1.write(Serial.read());
   checkSerial1URC();
+  // 推送/邮件的实际发送放在这里分片执行（每次最多一次网络请求），
+  // 保证 URC 与 HTTP 始终有机会被处理
+  processNotifyQueue();
 }

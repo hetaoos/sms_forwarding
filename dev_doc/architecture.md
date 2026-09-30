@@ -63,11 +63,32 @@ findOrCreateConcatSlot()    │
          processSmsContent()
            ├── isInNumberBlackList()? → 忽略
            ├── isAdmin()? → processAdminCommand()
-           │                  ├── "SMS:号码:内容" → sendSMS()
-           │                  └── "RESET" → resetModule() + ESP.restart()
-           ├── sendSMSToServer()     [push.cpp]
-           │     └── sendToChannel() × N
-           └── sendEmailNotification()  [push.cpp]
+           │                  ├── "SMS:号码:内容" → notifyQueueAdminSms()   [入队]
+           │                  └── "RESET"        → notifyQueueReboot()      [入队]
+           └── notifyQueueSms()      [push.cpp，只入队不做网络操作]
+```
+
+> 短信 URC 回调中**不做任何网络操作**：推送、邮件、管理员短信、重启全部排入通知队列，
+> 真正的发送由 `loop()` 里的 `processNotifyQueue()` 分片推进（每次调用最多一次网络请求）。
+
+### 通知队列（异步）流程
+
+```
+notifyQueueSms() / notifyQueueEmail() / notifyQueueAdminSms() / notifyQueueReboot()
+    │  只做参数校验 + 拷贝到定长字段，立即返回
+    ▼
+环形队列 notifyQueue[NOTIFY_QUEUE_SIZE=3]  (push.cpp)
+    │
+    ▼
+processNotifyQueue()      [code.ino loop，每轮调用一次]
+    │
+    ├─ 阶段推进（每轮最多一次网络请求，重试靠 nextAttemptAt 时间戳退避，不 delay）
+    │     NOTIFY_STAGE_SMS    → sendSMS()                  （管理员短信命令）
+    │     NOTIFY_STAGE_PUSH   → sendToChannel(..., 1)      （逐通道，每轮一个通道）
+    │     NOTIFY_STAGE_EMAIL  → emailAttemptOnce()         （单次发信尝试）
+    │     NOTIFY_STAGE_REBOOT → resetModule() + ESP.restart()
+    │
+    └─ 保护：WiFi 断开等待重连（≤120s）、单条任务总时限（≤180s）超时丢弃
 ```
 
 ### HTTP 请求流程
@@ -142,7 +163,7 @@ saveConfig()              [config.cpp]
 configValid = isConfigValid()  重新校验
     │
     ▼
-sendEmailNotification()   发送 "配置已更新" 邮件
+notifyQueueEmail()   入队 "配置已更新" 邮件（由主循环分片发送）
 ```
 
 ## 线程/任务模型

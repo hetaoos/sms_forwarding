@@ -174,10 +174,20 @@
 
 ## 模块: push.cpp — 推送与邮件
 
-### `void sendEmailNotification(const char* subject, const char* body)`
+### `void sendEmailNotification(const char* subject, const char* body, MailBodyType bodyType = MAIL_BODY_TEXT)`
+**同步版本，会阻塞调用者**。仅用于「必须立刻发出」的场景（如启动通知）。
+常规通知请走 `notifyQueueEmail()` / `notifyQueueSms()`，由主循环分片发送。
+
 **前提检查**: WiFi 已连接且 SMTP 四个字段均非空，否则打印跳过日志。
 
 **重试机制**: 最多尝试 3 次，失败后递增退避（1s/2s）；每次尝试前 `smtp.stop()` 清理残留连接状态；认证失败属配置错误，不重试直接返回。
+
+**实现**: 循环调用 `emailAttemptOnce()`（单次尝试），按返回的 `NotifyStep` 决定是否继续重试。
+
+---
+
+### `NotifyStep emailAttemptOnce(const char* subject, const char* body, MailBodyType bodyType)` （内部函数）
+单次发信尝试，`sendEmailNotification()` 与异步队列共用。
 
 **实现**:
 1. 创建 `smtp.connect(server, port, callback)`，返回值 false 则重试
@@ -185,23 +195,65 @@
 3. 构造 `SMTPMessage`，设置 from/to/subject/body/timestamp
 4. `smtp.send(msg)`，返回值 false 则重试
 
+**超时**: 连接前与认证后各调用一次 `ssl_client.setTimeout(SMTP_SOCKET_TIMEOUT_MS)`，
+把 ReadyMail 默认的 120 秒读取超时压回 15 秒（详见 module_details.md「网络超时」）。
+
 **from 格式**: `"SMS Notification <user@example.com>"`  
 **to 格式**: `"your_email <receiver@example.com>"`  
 **timestamp**: 使用 `time(nullptr)`（需 NTP 已同步）
 
 ---
 
-### `void sendSMSToServer(const char* sender, const char* message, const char* timestamp)`
+### `bool notifyQueueSms(const char* sender, const char* message, const char* timestamp)`
+**作用**: 短信转发的唯一入口（`processSmsContent()` 调用）。**只入队，不做任何网络操作**。
+
 **行为**:
-1. 检查 WiFi 连接
-2. 检查是否有启用的有效通道
-3. 遍历所有通道，对每个有效通道调用 `sendToChannel()`
-4. 通道间 delay(100ms)
+1. 校验：存在有效推送通道或已配置邮件，且短信正文非空（否则返回 false）
+2. 拷贝到队尾任务的定长字段（正文超 `NOTIFY_MESSAGE_SIZE-1` 字节则截断并告警）
+3. 队列满（3 条）时返回 false，由调用方记录"未入队"日志
+
+**队列内的执行顺序**（由 `processNotifyQueue()` 分片推进）:
+1. `NOTIFY_STAGE_PUSH`：逐个有效通道调用 `sendToChannel(..., maxAttempts=1)`，每轮主循环只推一个通道
+2. `NOTIFY_STAGE_EMAIL`：`buildSmsMail()` 构建标题与 HTML 正文 → `emailAttemptOnce()`
 
 ---
 
-### `void sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp)`
-**核心推送函数**。根据 `channel.type` 构建对应的 HTTP 请求参数（URL/ContentType/Body），统一交给 `executeChannelRequest()` 发送（内置重试）。
+### `bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType)`
+**作用**: 入队一封邮件（配置更新通知、管理员命令错误提示等）。正文超 `NOTIFY_BODY_SIZE-1` 字节会截断。
+
+---
+
+### `bool notifyQueueAdminSms(const char* targetPhone, const char* content, const char* cmdText)`
+**作用**: 入队管理员 `SMS:号码:内容` 命令。队列内先 `NOTIFY_STAGE_SMS`（`sendSMS()`），
+再 `NOTIFY_STAGE_EMAIL`（把执行结果追加到正文后发出）。结果保存在任务的 `smsOk` 字段。
+
+---
+
+### `bool notifyQueueReboot()`
+**作用**: 入队管理员 `RESET` 命令。队列内先发"重启命令已执行"邮件，
+邮件成功/放弃后再 `NOTIFY_STAGE_REBOOT`：`resetModule()` + `ESP.restart()`。
+
+---
+
+### `void processNotifyQueue()`
+**作用**: 主循环每轮调用，**每次最多发起一次网络请求**后立即返回。
+
+| 机制 | 说明 |
+|---|---|
+| 阶段推进 | `SMS` → `PUSH` → `EMAIL` →（`REBOOT`），每轮只做一步 |
+| 退避 | 用 `nextAttemptAt` 时间戳（推送 0.5s/1s，邮件 1s/2s），**不用 delay** |
+| 重试上限 | 单步 3 次（`NOTIFY_ATTEMPT_MAX`），4xx 立即放弃不重试 |
+| WiFi 断开 | 保留任务等待重连，超过 120s 才丢弃 |
+| 总时限 | 单条任务 180s（`NOTIFY_JOB_DEADLINE_MS`），超时丢弃，避免弱网时堵住后续短信 |
+| 队列深度 | 3（`NOTIFY_QUEUE_SIZE`） |
+
+---
+
+### `NotifyStep sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp, const char* senderName = "", const char* verifyCode = "", int maxAttempts = 3)`
+**核心推送函数**。根据 `channel.type` 构建对应的 HTTP 请求参数（URL/ContentType/Body），统一交给 `executeChannelRequest()` 发送。
+
+**返回**: `STEP_OK` / `STEP_FAILED`（4xx 等配置问题，不重试） / `STEP_RETRY`（可重试）。
+异步队列调用时传 `maxAttempts=1`：只发一次请求且不做退避 delay，由队列调度重试。
 
 **签名相关**:
 - 钉钉: `HMAC-SHA256(timestamp+"\n"+secret)` → Base64 → URLEncode → 追加到 URL
@@ -314,8 +366,10 @@ HMAC-SHA256(timestamp + "\n" + secret, secret) → Base64 → URLEncode
 **支持命令**:
 | 命令格式 | 行为 |
 |---|---|
-| `SMS:号码:内容` | 调用 `sendSMS()` 代发短信，邮件通知结果 |
-| `RESET` | 发送通知邮件 → `resetModule()` → `ESP.restart()` |
+| `SMS:号码:内容` | `notifyQueueAdminSms()` 入队：队列内 `sendSMS()` 代发短信 → 邮件通知结果 |
+| `RESET` | `notifyQueueReboot()` 入队：队列内先发通知邮件 → `resetModule()` → `ESP.restart()` |
+
+**注意**: 命令处理本身在 URC 回调中执行，因此只入队、立即返回；重活全部留给主循环。
 
 ---
 
@@ -323,8 +377,7 @@ HMAC-SHA256(timestamp + "\n" + secret, secret) → Base64 → URLEncode
 **处理顺序**:
 1. `isInNumberBlackList()` → 忽略
 2. `isAdmin()` + 命令格式检测 → `processAdminCommand()` → 不再发普通通知
-3. `sendSMSToServer()` — 推送所有启用的通道
-4. `sendEmailNotification()` — 邮件通知
+3. `notifyQueueSms()` — 入队（队列内依次完成：多通道推送 → 短信邮件通知）
 
 ---
 
