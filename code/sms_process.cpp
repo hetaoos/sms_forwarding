@@ -251,7 +251,8 @@ void processAdminCommand(const char* sender, const char* text) {
     } else {
       logCaptureLn(String("SMS命令格式错误"));
       String inner = "<div style=\"padding:16px 20px;font-size:14px;color:#333;line-height:1.6;\">SMS命令格式错误，正确格式: <code style=\"background:#f4f6f8;padding:2px 6px;border-radius:4px;\">SMS:号码:内容</code></div>";
-      notifyQueueEmail("命令执行失败", buildMailHtml("❌ 命令执行失败", inner).c_str(), MAIL_BODY_HTML);
+      notifyQueueEmail("命令执行失败", buildMailHtml("❌ 命令执行失败", inner).c_str(), MAIL_BODY_HTML,
+                       EMAIL_NOTIFY_COMMAND);
     }
   }
   // 处理 RESET 命令

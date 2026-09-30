@@ -38,6 +38,18 @@ struct PushChannel {
                           // Mailgun 类型下复用为「正文 HTML 模板」，留空用默认 HTML 邮件正文
 };
 
+// ---- 邮件通知信息类型（位掩码，存 Config::emailNotifyTypes）----
+// 每个位代表一类"会发邮件"的事件；关闭后该事件的邮件不再发送（动作本身照常执行）。
+// 新增类型时：在这里加一个位 → 入队处带上该位 → web_html.cpp 加一个复选框 → handleSave 解析。
+#define EMAIL_NOTIFY_SMS      (1u << 0)  // 短信转发
+#define EMAIL_NOTIFY_STARTUP  (1u << 1)  // 设备启动通知
+#define EMAIL_NOTIFY_CONFIG   (1u << 2)  // 配置变更通知
+#define EMAIL_NOTIFY_COMMAND  (1u << 3)  // 管理员命令（SMS 命令执行结果 / 命令格式错误）
+#define EMAIL_NOTIFY_REBOOT   (1u << 4)  // RESET 重启通知
+
+#define EMAIL_NOTIFY_ALL      0xFFFFFFFFu  // 有效位全集（用于归一化，扩展位数后需同步）
+#define EMAIL_NOTIFY_DEFAULT  EMAIL_NOTIFY_ALL  // 老配置（NVS 无此键）升级后保持原有行为：全开
+
 // 配置参数结构体
 struct Config {
   String smtpServer;
@@ -45,6 +57,7 @@ struct Config {
   String smtpUser;
   String smtpPass;
   String smtpSendTo;
+  uint32_t emailNotifyTypes;  // 允许发送邮件的事件类型位掩码（见 EMAIL_NOTIFY_*）
   String adminPhone;
   PushChannel pushChannels[MAX_PUSH_CHANNELS];  // 多推送通道
   String webUser;      // Web管理账号

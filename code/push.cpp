@@ -131,6 +131,10 @@ void sendStartupEmail() {
     logCaptureLn(String("邮件配置不完整，跳过启动通知"));
     return;
   }
+  if (!emailNotifyEnabled(EMAIL_NOTIFY_STARTUP)) {
+    logCaptureLn(String("「设备启动」邮件通知已关闭，跳过启动通知"));
+    return;
+  }
   if (WiFi.status() != WL_CONNECTED) {
     logCaptureLn(String("WiFi未连接，跳过启动通知"));
     return;
@@ -855,12 +859,14 @@ bool notifyQueueSms(const char* sender, const char* message, const char* timesta
     logCaptureLn(String("WiFi未连接，通知先入队，待恢复连接后发送"));
   }
   // 先判断是否有可用的出口（推送通道或邮件），都没有就没必要占用队列
+  // 邮件还要看"短信转发"这一事件类型是否被允许，关掉后仅靠推送通道也要能工作
   bool hasChannel = false;
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     if (isPushChannelValid(config.pushChannels[i])) { hasChannel = true; break; }
   }
-  if (!hasChannel && !emailConfigured()) {
-    logCaptureLn(String("没有启用的推送通道且邮件未配置，跳过本次通知"));
+  bool mailWanted = emailConfigured() && emailNotifyEnabled(EMAIL_NOTIFY_SMS);
+  if (!hasChannel && !mailWanted) {
+    logCaptureLn(String("没有启用的推送通道且邮件未配置（或短信转发邮件已关闭），跳过本次通知"));
     return false;
   }
 
@@ -880,6 +886,7 @@ bool notifyQueueSms(const char* sender, const char* message, const char* timesta
   memset(&job, 0, sizeof(job));
   job.type = NOTIFY_JOB_SMS_PUSH;
   job.stage = NOTIFY_STAGE_PUSH;
+  job.mailBit = EMAIL_NOTIFY_SMS;
   job.enqueuedAt = millis();
   copyField(job.sender, sender, NOTIFY_SENDER_SIZE);
   copyField(job.timestamp, timestamp, NOTIFY_TIMESTAMP_SIZE);
@@ -895,9 +902,13 @@ bool notifyQueueSms(const char* sender, const char* message, const char* timesta
 }
 
 // 入队一封邮件（正文已构建好）
-bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType) {
+bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType, uint32_t typeBit) {
   if (!emailConfigured()) {
     logCaptureLn(String("邮件配置不完整，跳过邮件入队"));
+    return false;
+  }
+  if (!emailNotifyEnabled(typeBit)) {
+    logCaptureLn(String("该类邮件通知已在配置中关闭，跳过邮件入队"));
     return false;
   }
   if (!body || strlen(body) == 0) {
@@ -914,6 +925,7 @@ bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyTy
   job.type = NOTIFY_JOB_EMAIL;
   job.stage = NOTIFY_STAGE_EMAIL;   // 邮件任务直接进入发信阶段
   job.bodyType = (uint8_t)bodyType;
+  job.mailBit = typeBit;
   job.enqueuedAt = millis();
   copyField(job.subject, subject, NOTIFY_SUBJECT_SIZE);
   copyField(job.body, body, NOTIFY_BODY_SIZE);
@@ -942,6 +954,7 @@ bool notifyQueueAdminSms(const char* targetPhone, const char* content, const cha
   memset(&job, 0, sizeof(job));
   job.type = NOTIFY_JOB_SMS_COMMAND;
   job.stage = NOTIFY_STAGE_SMS;
+  job.mailBit = EMAIL_NOTIFY_COMMAND;   // 结果邮件；关闭时短信照发，只是不发邮件
   job.enqueuedAt = millis();
   copyField(job.sender, targetPhone, NOTIFY_SENDER_SIZE);      // 复用 sender 存目标号码
   copyField(job.message, content, NOTIFY_MESSAGE_SIZE);        // 短信正文
@@ -966,6 +979,7 @@ bool notifyQueueReboot() {
   job.type = NOTIFY_JOB_REBOOT;
   job.stage = NOTIFY_STAGE_EMAIL;      // 先发邮件，发完（或超时）再重启
   job.bodyType = (uint8_t)MAIL_BODY_HTML;
+  job.mailBit = EMAIL_NOTIFY_REBOOT;   // 通知邮件；关闭时直接重启，不发邮件
   job.enqueuedAt = millis();
   copyField(job.subject, "重启命令已执行", NOTIFY_SUBJECT_SIZE);
   String inner = "<div style=\"padding:16px 20px;font-size:14px;color:#333;line-height:1.6;\">收到 RESET 命令，即将重启模组与 ESP32。</div>";
@@ -1129,6 +1143,18 @@ void processNotifyQueue() {
   }
 
   // ---- 邮件阶段 ----
+  // 事件类型开关：在发送时才判定，保证保存配置后队列里积压的旧任务也立刻生效。
+  // 命令/重启类只跳过邮件，动作本身（发短信、重启）照常执行。
+  if (job.mailBit == 0 || !emailNotifyEnabled(job.mailBit)) {
+    if (job.type == NOTIFY_JOB_REBOOT) {
+      job.stage = NOTIFY_STAGE_REBOOT;
+      return;
+    }
+    logCaptureLn(String("该类邮件通知已关闭，跳过邮件发送"));
+    notifyDequeue();
+    return;
+  }
+
   if (job.type == NOTIFY_JOB_SMS_PUSH) {
     if (!emailConfigured()) {   // 未配置邮件：短信只推送即可
       notifyDequeue();

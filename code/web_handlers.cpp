@@ -187,6 +187,11 @@ void handleRoot() {
   html.replace("%SMTP_USER%", config.smtpUser);
   html.replace("%SMTP_PASS%", config.smtpPass);
   html.replace("%SMTP_SEND_TO%", config.smtpSendTo);
+  html.replace("%MT_SMS_CHECKED%", emailNotifyEnabled(EMAIL_NOTIFY_SMS) ? "checked" : "");
+  html.replace("%MT_STARTUP_CHECKED%", emailNotifyEnabled(EMAIL_NOTIFY_STARTUP) ? "checked" : "");
+  html.replace("%MT_CONFIG_CHECKED%", emailNotifyEnabled(EMAIL_NOTIFY_CONFIG) ? "checked" : "");
+  html.replace("%MT_CMD_CHECKED%", emailNotifyEnabled(EMAIL_NOTIFY_COMMAND) ? "checked" : "");
+  html.replace("%MT_REBOOT_CHECKED%", emailNotifyEnabled(EMAIL_NOTIFY_REBOOT) ? "checked" : "");
   html.replace("%ADMIN_PHONE%", config.adminPhone);
   html.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
 
@@ -913,6 +918,17 @@ void handleSave() {
   }
   if (server.hasArg("smtpSendTo")) {
     config.smtpSendTo = server.arg("smtpSendTo");
+  }
+  // 邮件通知类型（位掩码）：只有「邮件通知」页会提交 smtpServer，据此判断是否需要更新；
+  // 复选框未勾选时不会出现在请求里，对应位即为 0（与推送通道 enabled 的处理方式一致）。
+  if (server.hasArg("smtpServer")) {
+    uint32_t types = 0;
+    if (server.hasArg("mtSms"))     types |= EMAIL_NOTIFY_SMS;
+    if (server.hasArg("mtStartup")) types |= EMAIL_NOTIFY_STARTUP;
+    if (server.hasArg("mtConfig"))  types |= EMAIL_NOTIFY_CONFIG;
+    if (server.hasArg("mtCmd"))     types |= EMAIL_NOTIFY_COMMAND;
+    if (server.hasArg("mtReboot"))  types |= EMAIL_NOTIFY_REBOOT;
+    config.emailNotifyTypes = types;
   }
 
   // 管理员 & 黑名单表单：只在字段存在时更新

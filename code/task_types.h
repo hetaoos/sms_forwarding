@@ -61,6 +61,7 @@ struct NotifyJob {
   uint8_t attempt;           // 当前步骤已尝试次数
   uint8_t bodyType;          // 邮件正文类型（见 push.h 的 MailBodyType），避免本文件反向依赖 push.h
   uint8_t smsOk;             // 管理员 SMS 命令的发送结果（1=成功，0=失败）
+  uint32_t mailBit;          // 该任务对应邮件所属的事件类型位（EMAIL_NOTIFY_*），0=不发邮件
   uint32_t enqueuedAt;       // 入队时刻（WiFi 断开时的等待时限基准）
   uint32_t nextAttemptAt;    // 退避到该时刻后才重试（0=立即）
   char sender[NOTIFY_SENDER_SIZE];

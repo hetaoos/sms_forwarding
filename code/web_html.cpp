@@ -80,6 +80,9 @@ const char* htmlPage = R"rawliteral(
     .form-group { margin-bottom: 14px; }
     .form-group:last-child { margin-bottom: 0; }
     .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--body); margin-bottom: 4px; letter-spacing: -0.1px; }
+    .mail-type-list { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+    .mail-type-list .form-label { display: flex; align-items: center; gap: 6px; margin-bottom: 0; font-size: 13px; cursor: pointer; }
+    .mail-type-list input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--ink); }
     .form-input, .form-select, .form-textarea {
       width: 100%; padding: 7px 11px; font-size: 13px; font-family: inherit;
       border: 1px solid var(--hairline); border-radius: var(--radius-sm);
@@ -323,6 +326,19 @@ const char* htmlPage = R"rawliteral(
             <div class="form-group"><label class="form-label">密码 / 授权码</label><input class="form-input" type="password" name="smtpPass" value="%SMTP_PASS%" placeholder="授权码"></div>
           </div>
           <div class="form-group"><label class="form-label">接收邮件地址</label><input class="form-input" type="text" name="smtpSendTo" value="%SMTP_SEND_TO%" placeholder="receiver@example.com"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">📬 通知类型</div>
+        <div class="card-body">
+          <p class="form-hint" style="margin-bottom:10px;">勾选允许通过邮件发送的通知类型；未勾选的类型仍会正常执行（转发推送、发送短信、重启设备），只是不发邮件。</p>
+          <div class="mail-type-list">
+            <label class="form-label"><input type="checkbox" name="mtSms" %MT_SMS_CHECKED%> 短信转发</label>
+            <label class="form-label"><input type="checkbox" name="mtStartup" %MT_STARTUP_CHECKED%> 设备启动</label>
+            <label class="form-label"><input type="checkbox" name="mtConfig" %MT_CONFIG_CHECKED%> 配置变更</label>
+            <label class="form-label"><input type="checkbox" name="mtCmd" %MT_CMD_CHECKED%> 管理员命令结果</label>
+            <label class="form-label"><input type="checkbox" name="mtReboot" %MT_REBOOT_CHECKED%> 重启通知</label>
+          </div>
         </div>
       </div>
       <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>

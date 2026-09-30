@@ -41,7 +41,9 @@ enum NotifyStep { STEP_OK, STEP_FAILED, STEP_RETRY };
 bool notifyQueueSms(const char* sender, const char* message, const char* timestamp);
 
 // 入队一封邮件（正文已构建好，最长 NOTIFY_BODY_SIZE-1 字节，超出部分截断）
-bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType = MAIL_BODY_HTML);
+// typeBit 指明这封邮件属于哪类事件（EMAIL_NOTIFY_*），该位被关闭时不会入队（返回 false）
+bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType = MAIL_BODY_HTML,
+                      uint32_t typeBit = EMAIL_NOTIFY_CONFIG);
 
 // 入队"管理员 SMS 命令"：先经模组把 content 发给 targetPhone，再把执行结果发邮件通知。
 // cmdText 为原始命令（仅用于回显到邮件正文）。

@@ -10,6 +10,7 @@ void saveConfig() {
   preferences.putString("smtpUser", config.smtpUser);
   preferences.putString("smtpPass", config.smtpPass);
   preferences.putString("smtpSendTo", config.smtpSendTo);
+  preferences.putUInt("mailTypes", config.emailNotifyTypes);
   preferences.putString("adminPhone", config.adminPhone);
   preferences.putString("webUser", config.webUser);
   preferences.putString("webPass", config.webPass);
@@ -44,6 +45,8 @@ void loadConfig() {
   config.smtpUser = preferences.getString("smtpUser", "");
   config.smtpPass = preferences.getString("smtpPass", "");
   config.smtpSendTo = preferences.getString("smtpSendTo", "");
+  // 老固件升级时 NVS 无此键，取默认值（全开），行为与升级前一致
+  config.emailNotifyTypes = preferences.getUInt("mailTypes", EMAIL_NOTIFY_DEFAULT) & EMAIL_NOTIFY_ALL;
   config.adminPhone = preferences.getString("adminPhone", "");
   config.webUser = preferences.getString("webUser", DEFAULT_WEB_USER);
   config.webPass = preferences.getString("webPass", DEFAULT_WEB_PASS);
@@ -122,6 +125,11 @@ bool isConfigValid() {
   }
   
   return emailValid || pushValid;
+}
+
+// 判断某类事件是否允许发邮件（mask 取 EMAIL_NOTIFY_*）
+bool emailNotifyEnabled(uint32_t mask) {
+  return (config.emailNotifyTypes & mask) != 0;
 }
 
 // 获取当前设备URL（AP 模式下返回配置热点地址，否则返回 STA 地址）
