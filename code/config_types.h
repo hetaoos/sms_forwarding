@@ -94,6 +94,11 @@ struct SignalInfo {
       quality("未知") {}
 };
 
+// ---- 板载蓝色 LED 指示 ----
+// LED 为低电平点亮。启动/初始化完成后保持熄灭，只在收到短信时闪烁。
+#define SMS_LED_BLINK_TIMES 2  // 收到短信时闪烁的次数
+#define SMS_LED_BLINK_MS 200   // 单次亮/灭的时长（毫秒），闪烁由 ledTick() 推进
+
 // 长短信合并相关定义
 #define MAX_CONCAT_PARTS 10       // 最大支持的长短信分段数
 #define CONCAT_TIMEOUT_MS 30000   // 长短信空闲超时: 距上一个分段的间隔超过该值就强制转发(毫秒)

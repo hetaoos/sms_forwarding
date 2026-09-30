@@ -231,6 +231,7 @@ void modemAutoRecover() {
   bool ok = modemInit(true);
   if (ok) {
     reinitInterval = MODEM_REINIT_INTERVAL_MS;
+    ledOff();   // 后台重试成功，同样熄灭指示灯
   } else {
     reinitInterval = (reinitInterval * 2 > MODEM_REINIT_MAX_INTERVAL_MS)
                          ? MODEM_REINIT_MAX_INTERVAL_MS
@@ -244,6 +245,46 @@ void blink_short(unsigned long gap_time) {
   responsiveDelay(50);
   digitalWrite(LED_BUILTIN, HIGH);
   responsiveDelay(gap_time);  // 重试间隙同样保持 HTTP 响应
+}
+
+// ---- 蓝色 LED 指示（低电平点亮）----
+// 初始化完成后保持熄灭；收到短信时按「亮-灭」交替闪烁若干次，由 ledTick() 在主循环里推进，
+// 避免在 URC 回调中用 delay() 卡住主循环。
+static int ledPhasesLeft = 0;             // 剩余的半周期数（亮、灭各算一段，最后一段是熄灭）
+static unsigned long ledPhaseEnd = 0;     // 当前半周期的结束时刻（millis）
+static unsigned long ledPhaseMs = SMS_LED_BLINK_MS;
+
+void ledOff() {
+  ledPhasesLeft = 0;
+  ledPhaseEnd = 0;
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+
+// 触发 times 次闪烁：每段持续 duration 毫秒，亮灭交替，结束保持熄灭
+void ledBlink(unsigned int times, unsigned long duration) {
+  if (times == 0) {
+    ledOff();
+    return;
+  }
+  ledPhaseMs = duration;
+  ledPhasesLeft = times * 2;   // 亮、灭 … 亮、灭，末尾的熄灭段负责收尾
+  ledPhaseEnd = millis() + duration;
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void ledTick() {
+  if (ledPhasesLeft == 0) return;
+  if ((long)(millis() - ledPhaseEnd) < 0) return;
+
+  ledPhasesLeft--;
+  if (ledPhasesLeft == 0) {
+    ledOff();
+    return;
+  }
+  // 剩余段数为奇数 → 熄灭段；为偶数 → 点亮段
+  bool on = (ledPhasesLeft % 2 == 0);
+  digitalWrite(LED_BUILTIN, on ? LOW : HIGH);
+  ledPhaseEnd = millis() + ledPhaseMs;
 }
 
 bool sendATandWaitOK(const char* cmd, unsigned long timeout) {

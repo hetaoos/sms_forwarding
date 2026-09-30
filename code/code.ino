@@ -99,10 +99,11 @@ void setup() {
   }
 
   ssl_client.setInsecure();
-  digitalWrite(LED_BUILTIN, LOW);
 
   // ---- 模组初始化（较慢，但网页已可访问） ----
   modemInit();
+  // 初始化成功后熄灭蓝色 LED；失败则保持点亮，提示模组不可用
+  if (modemReady) ledOff();
 
   // ---- 启动通知（模组初始化完成后发送，可附带模组/信号/号码等信息） ----
   if (configValid) {
@@ -112,6 +113,7 @@ void setup() {
 }
 
 void loop() {
+  ledTick();   // 短信指示灯到时熄灭（非阻塞）
   server.handleClient();
   if (!configValid) {
     if (millis() - lastPrintTime >= 1000) {

@@ -274,6 +274,7 @@ void processAdminCommand(const char* sender, const char* text) {
 
 // 处理最终的短信内容（管理员命令检查和转发）
 void processSmsContent(const char* sender, const char* text, const char* timestamp) {
+  ledBlink();   // 收到短信闪两下（非阻塞，由 loop() 的 ledTick() 推进）
   logCaptureLn(String("=== 处理短信内容 ==="));
   logCaptureLn(String("发送者: " + String(sender)));
   logCaptureLn(String("时间戳: " + String(timestamp)));
