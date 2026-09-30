@@ -2,6 +2,7 @@
 #include "web_handlers.h"
 #include "config.h"
 #include "web_handlers.h"
+#include "modem.h"
 #include <HTTPClient.h>
 #include <mbedtls/md.h>
 #include <base64.h>
@@ -68,6 +69,149 @@ void sendEmailNotification(const char* subject, const char* body, const char* ht
 
   logCaptureLn(String("邮件多次重试后仍失败，本次通知已丢弃"));
   smtp.stop();
+}
+
+// 启动邮件表格行（HTML）
+static String startupRow(const String& key, const String& val) {
+  return "<tr><td style=\"padding:8px 0;width:96px;color:#888;vertical-align:top;white-space:nowrap;\">" + htmlEscape(key) +
+         "</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;word-break:break-all;\">" + htmlEscape(val) + "</td></tr>";
+}
+
+// 发送"设备已启动"通知邮件：在模组初始化完成后调用，
+// 收集设备/模组/信号/号码等信息，以 HTML 富文本 + 纯文本双格式发送
+void sendStartupEmail() {
+  if (config.smtpServer.length() == 0 || config.smtpUser.length() == 0 ||
+      config.smtpPass.length() == 0 || config.smtpSendTo.length() == 0) {
+    logCaptureLn(String("邮件配置不完整，跳过启动通知"));
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    logCaptureLn(String("WiFi未连接，跳过启动通知"));
+    return;
+  }
+
+  // ---- 收集设备/模组/信号信息 ----
+  String deviceUrl = getDeviceUrl();
+  String ip = WiFi.localIP().toString();
+  int wifiRssi = WiFi.RSSI();
+
+  String timeStr;
+  if (timeSynced) {
+    time_t now = time(nullptr);
+    struct tm* t = gmtime(&now);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d UTC",
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
+    timeStr = buf;
+  } else {
+    timeStr = "未同步（使用设备时间）";
+  }
+
+  // 模组初始化状态
+  String initStatus = modemReady ? "已就绪" : "未就绪";
+  String netStatus  = modemReady ? "已注册网络" : "未注册（无SIM卡或信号差）";
+
+  // 模组信息（全局变量，由 modemInit 解析 ATI 写入）
+  String manufacturer = modemManufacturer;
+  String model = modemModel;
+  String version = modemVersion;
+
+  // 信号
+  SignalInfo sig;
+  bool sigOk = getModemSignal(sig);
+  String sigQuality = sig.quality;
+  String rsrpStr = sig.lte ? sig.rsrpText : "—";
+  String rsrqStr = sig.lte ? sig.rsrqText : "—";
+  String rssiStr = sig.rssiText;
+  String sigSource = sigOk ? sig.source : "未取到";
+
+  // 本机号码（SIM 卡 MSISDN）
+  String ownNumber = getModemOwnNumber();
+  if (ownNumber.length() == 0) ownNumber = "未获取到（SIM未存储号码或无服务）";
+  String adminNumber = config.adminPhone.length() > 0 ? config.adminPhone : "未设置";
+
+  // 推送通道统计
+  int enabledChannels = 0;
+  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
+    if (isPushChannelValid(config.pushChannels[i])) enabledChannels++;
+  }
+  String channelSummary = String(enabledChannels) + " 个已启用 / 共 " + String(MAX_PUSH_CHANNELS) + " 个";
+
+  // ---- 纯文本正文（兼容不渲染 HTML 的客户端） ----
+  String body = "短信转发器已启动\n";
+  body += "设备地址: " + deviceUrl + "\n";
+  body += "IP地址: " + ip + "\n";
+  body += "WiFi信号: " + String(wifiRssi) + " dBm\n";
+  body += "系统时间: " + timeStr + "\n";
+  body += "模组初始化: " + initStatus + "（" + netStatus + "）\n";
+  body += "模组信息: " + manufacturer + " / " + model + " / " + version + "\n";
+  body += "信号状态: 评级 " + sigQuality + "，RSRP " + rsrpStr + "，RSRQ " + rsrqStr + "，RSSI " + rssiStr + "\n";
+  body += "本机号码: " + ownNumber + "\n";
+  body += "管理员号码: " + adminNumber + "\n";
+  body += "推送通道: " + channelSummary + "\n";
+
+  // ---- HTML 富文本正文 ----
+  String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
+  html += "<div style=\"max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
+
+  // 头部标题栏
+  html += "<div style=\"background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
+  html += "<span style=\"font-size:17px;font-weight:600;\">🚀 短信转发器已启动</span>";
+  html += "</div>";
+
+  // 模组状态徽标
+  String badgeBg = modemReady ? "#e6f7ec" : "#fff4e6";
+  String badgeBorder = modemReady ? "#bfe9cd" : "#ffd9a8";
+  String badgeColor = modemReady ? "#1a8a4a" : "#c97a00";
+  html += "<div style=\"margin:16px 20px 0;background:" + badgeBg + ";border:1px solid " + badgeBorder + ";border-radius:8px;padding:12px 16px;\">";
+  html += "<span style=\"font-size:14px;font-weight:600;color:" + badgeColor + ";\">" + htmlEscape(initStatus) + "</span>";
+  html += " <span style=\"font-size:13px;color:#666;\">" + htmlEscape(netStatus) + "</span>";
+  html += "</div>";
+
+  // 设备信息
+  html += "<div style=\"padding:16px 20px 4px;\">";
+  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📡 设备信息</div>";
+  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  html += startupRow("设备地址", deviceUrl);
+  html += startupRow("IP地址", ip);
+  html += startupRow("WiFi信号", String(wifiRssi) + " dBm");
+  html += startupRow("系统时间", timeStr);
+  html += startupRow("推送通道", channelSummary);
+  html += "</table></div>";
+
+  // 模组信息
+  html += "<div style=\"padding:0 20px 4px;\">";
+  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">🔧 模组信息</div>";
+  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  html += startupRow("制造商", manufacturer);
+  html += startupRow("型号", model);
+  html += startupRow("固件版本", version);
+  html += "</table></div>";
+
+  // 信号状态
+  html += "<div style=\"padding:0 20px 4px;\">";
+  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📶 信号状态</div>";
+  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  html += startupRow("评级", sigQuality);
+  html += startupRow("RSRP", rsrpStr);
+  html += startupRow("RSRQ", rsrqStr);
+  html += startupRow("RSSI", rssiStr);
+  html += startupRow("数据来源", sigSource);
+  html += "</table></div>";
+
+  // 号码信息
+  html += "<div style=\"padding:0 20px 4px;\">";
+  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📱 号码信息</div>";
+  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  html += startupRow("本机号码", ownNumber);
+  html += startupRow("管理员号码", adminNumber);
+  html += "</table></div>";
+
+  // 底部标识
+  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;margin-top:12px;\">SMS Forwarder · 短信转发通知</div>";
+  html += "</div></div>";
+
+  sendEmailNotification("短信转发器已启动", body.c_str(), html.c_str());
 }
 
 // URL编码辅助函数

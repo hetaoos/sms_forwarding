@@ -16,5 +16,7 @@ bool sendSMS(const char* phoneNumber, const char* message);
 bool modemBusy();
 // 信号强度统一查询入口（RSRP/RSRQ/RSSI），所有展示信号的地方都调用它
 bool getModemSignal(SignalInfo& info);
+// 获取本机号码（SIM 卡 MSISDN，AT+CNUM），取不到时返回空串
+String getModemOwnNumber();
 
 #endif

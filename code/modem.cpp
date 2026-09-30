@@ -161,6 +161,10 @@ bool modemInit(bool background) {
         lineStart = i + 1;
       }
     }
+    // 写入全局变量，供状态查询/启动邮件使用
+    modemManufacturer = manufacturer;
+    modemModel = model;
+    modemVersion = version;
     //这个模组这条命令有bug
     if(model == "ML307Y") need_set_CGACT = false;
   }
@@ -387,6 +391,34 @@ bool getModemSignal(SignalInfo& info) {
   logCaptureLn(String("信号查询[" + info.source + "]: RSRP=" + info.rsrpText +
                       ", RSSI=" + info.rssiText + ", raw=" + info.raw));
   return info.valid;
+}
+
+// 获取本机号码（SIM 卡 MSISDN）：AT+CNUM 返回 +CNUM: <名称>,"+86138...",<类型>
+// 取第二个被双引号包裹的字段（号码本身），取不到时返回空串
+String getModemOwnNumber() {
+  String resp = sendATCommand("AT+CNUM", 2000);
+  int idx = resp.indexOf("+CNUM:");
+  if (idx < 0) return "";
+  // 收集所有被双引号包裹的字段，取第二个（号码）
+  int pos = idx;
+  int quoteCount = 0;
+  int start = -1;
+  for (int i = idx; i < resp.length(); i++) {
+    if (resp.charAt(i) == '"') {
+      if (start < 0) {
+        start = i + 1;
+      } else {
+        quoteCount++;
+        if (quoteCount == 2) {
+          String num = resp.substring(start, i);
+          num.trim();
+          return num;
+        }
+        start = -1;
+      }
+    }
+  }
+  return "";
 }
 
 // 取消模组可能残留的 CMGS 输入态：

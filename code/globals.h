@@ -35,6 +35,9 @@ extern WebServer server;
 extern bool configValid;
 extern bool timeSynced;
 extern bool modemReady;
+extern String modemManufacturer;  // 模组厂商（ATI 解析）
+extern String modemModel;         // 模组型号（ATI 解析）
+extern String modemVersion;       // 模组固件版本（ATI 解析）
 extern unsigned long lastModemInitAttempt;
 extern unsigned long lastPrintTime;
 extern ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];

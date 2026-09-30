@@ -5,6 +5,9 @@
 
 void sendEmailNotification(const char* subject, const char* body, const char* html = nullptr);
 
+// 发送"设备已启动"通知邮件（含模组初始化状态/模组信息/信号/号码等，HTML 富文本）
+void sendStartupEmail();
+
 // 从短信正文解析发送者名称（【】/[[ ]]/[ ] 包裹）与验证码（4~6 位纯数字串）
 void parseSmsMeta(const String& message, String& senderName, String& verifyCode);
 
