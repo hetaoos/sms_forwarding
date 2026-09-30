@@ -308,7 +308,40 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   if (senderName.length() > 0) body += " (" + senderName + ")";
   body += "，时间：" + String(timestamp) + "，内容：" + String(text);
   if (verifyCode.length() > 0) body += "，验证码：" + verifyCode;
-  sendEmailNotification(subject.c_str(), body.c_str());
+
+  // 富文本（HTML）正文：卡片式布局，渐变标题栏 + 验证码高亮块 + 表格字段
+  String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
+  html += "<div style=\"max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
+
+  // 头部标题栏
+  html += "<div style=\"background:#2f6fed;background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
+  html += "<span style=\"font-size:17px;font-weight:600;\">📱 " + htmlEscape(subject) + "</span>";
+  html += "</div>";
+
+  // 验证码高亮块
+  if (verifyCode.length() > 0) {
+    html += "<div style=\"margin:16px 20px 0;background:#fff4f4;border:1px solid #ffd0d0;border-radius:8px;padding:12px 16px;text-align:center;\">";
+    html += "<div style=\"font-size:12px;color:#c0392b;letter-spacing:2px;\">验证码</div>";
+    html += "<div style=\"font-size:28px;font-weight:700;color:#d00;letter-spacing:5px;margin-top:2px;\">" + htmlEscape(verifyCode) + "</div>";
+    html += "</div>";
+  }
+
+  // 信息字段（表格）
+  html += "<div style=\"padding:16px 20px;\">";
+  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  html += "<tr><td style=\"padding:8px 0;width:64px;color:#888;vertical-align:top;\">发件人</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(sender));
+  if (senderName.length() > 0) html += " <span style=\"color:#2f6fed;\">(" + htmlEscape(senderName) + ")</span>";
+  html += "</td></tr>";
+  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(timestamp)) + "</td></tr>";
+  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">内容</td><td style=\"padding:8px 0;word-break:break-word;\">" + htmlEscape(String(text)) + "</td></tr>";
+  html += "</table></div>";
+
+  // 底部标识
+  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;\">SMS Forwarder · 短信转发通知</div>";
+
+  html += "</div></div>";
+
+  sendEmailNotification(subject.c_str(), body.c_str(), html.c_str());
 }
 
 // 处理URC和PDU

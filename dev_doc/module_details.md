@@ -319,7 +319,8 @@ mbedtls_md_free(&ctx);
 
 ### 邮件发送
 
-使用 ReadyMail 库的 SMTP 客户端:
+使用 ReadyMail 库的 SMTP 客户端。短信通知邮件为 **multipart/alternative**：同时发送纯文本（`msg.text.body()`）与 HTML 富文本（`msg.html.body()`），支持标题、加粗标签、换行与验证码高亮；不支持 HTML 的客户端自动回退到纯文本。
+
 ```cpp
 smtp.connect(server, port, callback);
 smtp.authenticate(user, pass, readymail_auth_password);
@@ -327,10 +328,13 @@ SMTPMessage msg;
 msg.headers.add(rfc822_from, from);
 msg.headers.add(rfc822_to, to);
 msg.headers.add(rfc822_subject, subject);
-msg.text.body(body);
+msg.text.body(body);            // 纯文本兜底
+msg.html.body(html);            // HTML 富文本（由 htmlEscape() 转义后拼接）
 msg.timestamp = time(nullptr);
 smtp.send(msg);
 ```
+
+> 动态内容（发送者、名称、内容、验证码）需经 `htmlEscape()` 转义后再拼入 HTML，避免 `<`/`>`/`&` 破坏版式。
 
 ### 修改指南
 

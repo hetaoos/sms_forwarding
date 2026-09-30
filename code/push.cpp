@@ -8,7 +8,7 @@
 #include <sys/time.h>
 
 // 发送邮件通知函数（带重试）
-void sendEmailNotification(const char* subject, const char* body) {
+void sendEmailNotification(const char* subject, const char* body, const char* html) {
   if (config.smtpServer.length() == 0 || config.smtpUser.length() == 0 || 
       config.smtpPass.length() == 0 || config.smtpSendTo.length() == 0) {
     logCaptureLn(String("邮件配置不完整，跳过发送"));
@@ -53,6 +53,9 @@ void sendEmailNotification(const char* subject, const char* body) {
     msg.headers.add(rfc822_to, to.c_str());
     msg.headers.add(rfc822_subject, subject);
     msg.text.body(body);
+    if (html && strlen(html) > 0) {
+      msg.html.body(html);
+    }
     msg.timestamp = time(nullptr);
 
     if (smtp.send(msg)) {
@@ -130,6 +133,22 @@ String jsonEscape(const String& str) {
     else if (c == '\n') result += "\\n";
     else if (c == '\r') result += "\\r";
     else if (c == '\t') result += "\\t";
+    else result += c;
+  }
+  return result;
+}
+
+// HTML转义函数（同时把换行符转为 <br>），用于邮件富文本正文
+String htmlEscape(const String& str) {
+  String result = "";
+  for (unsigned int i = 0; i < str.length(); i++) {
+    char c = str.charAt(i);
+    if (c == '&') result += "&amp;";
+    else if (c == '<') result += "&lt;";
+    else if (c == '>') result += "&gt;";
+    else if (c == '"') result += "&quot;";
+    else if (c == '\n') result += "<br>";
+    else if (c == '\r') { /* 忽略，避免与 \n 重复 */ }
     else result += c;
   }
   return result;
