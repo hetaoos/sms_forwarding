@@ -57,6 +57,7 @@
 | PUSHPLUS / SERVERCHAN | `key1` 非空 |
 | GOTIFY | `url` 非空 **且** `key1` 非空 |
 | TELEGRAM | `key1` 非空 **且** `key2` 非空 |
+| MAILGUN | `key1` 非空 **且** `key2` 非空 **且** `key3` 非空 |
 
 **前提**: `ch.enabled == true`，否则直接返回 false。
 
@@ -284,6 +285,7 @@
 | PushPlus | `"code":200` |
 | Server酱 | `"code":0` |
 | Telegram | `"ok":true` |
+| Mailgun | 含 `Queued` |
 | 其余平台 | 不检查，以 HTTP 状态码为准 |
 
 ---

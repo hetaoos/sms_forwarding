@@ -108,8 +108,11 @@ checkSerial1URC();             // 5. 检查模组URC(短信上报)
 - `name` — WebUI 中显示的名称
 - `url` — Webhook URL（GET 类型则为目标 URL）
 - `key1` — 通用参数 1（token/secret/chat_id 等）
-- `key2` — 通用参数 2（channel/bot_token 等）
-- `customBody` — 自定义模板的 HTTP body
+- `key2` — 通用参数 2（channel/bot_token/域名 等）
+- `key3` — 通用参数 3（Mailgun 收件人等）
+- `key4` — 通用参数 4（Mailgun 发件人等）
+- `key5` — 通用参数 5（Mailgun 标题模板等）
+- `customBody` — 自定义模板的 HTTP body；Mailgun 下复用为正文 HTML 模板
 
 ### Config 结构体
 
@@ -278,6 +281,10 @@ NOTIFY_STAGE_PUSH:
                  │               └─ URL: {url}/message?token={key1}
                  └─ TELEGRAM   → POST {chat_id, text: notifyText}
                      └─ 默认URL: https://api.telegram.org/bot{key2}/sendMessage
+                 ├─ MAILGUN    → POST form: from/to/subject/html/text（Basic 认证 api:{key1}）
+                 │   └─ URL: {url 或 https://api.mailgun.net}/v3/{key2}/messages
+                 │   └─ 收件人 {key3}（逗号/分号分隔 → 多个 to 参数）；发件人 {key4} 留空为 SMS Notification <sms@{key2}>
+                 │   └─ 标题模板 {key5} / 正文 HTML 模板 customBody，留空回退 buildSmsMail()
 ```
 
 ### 短信元信息解析（parseSmsMeta）

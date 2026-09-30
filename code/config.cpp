@@ -26,6 +26,9 @@ void saveConfig() {
     preferences.putString((prefix + "name").c_str(), config.pushChannels[i].name);
     preferences.putString((prefix + "k1").c_str(), config.pushChannels[i].key1);
     preferences.putString((prefix + "k2").c_str(), config.pushChannels[i].key2);
+    preferences.putString((prefix + "k3").c_str(), config.pushChannels[i].key3);
+    preferences.putString((prefix + "k4").c_str(), config.pushChannels[i].key4);
+    preferences.putString((prefix + "k5").c_str(), config.pushChannels[i].key5);
     preferences.putString((prefix + "body").c_str(), config.pushChannels[i].customBody);
   }
   
@@ -57,6 +60,9 @@ void loadConfig() {
     config.pushChannels[i].name = preferences.getString((prefix + "name").c_str(), "通道" + String(i + 1));
     config.pushChannels[i].key1 = preferences.getString((prefix + "k1").c_str(), "");
     config.pushChannels[i].key2 = preferences.getString((prefix + "k2").c_str(), "");
+    config.pushChannels[i].key3 = preferences.getString((prefix + "k3").c_str(), "");
+    config.pushChannels[i].key4 = preferences.getString((prefix + "k4").c_str(), "");
+    config.pushChannels[i].key5 = preferences.getString((prefix + "k5").c_str(), "");
     config.pushChannels[i].customBody = preferences.getString((prefix + "body").c_str(), "");
   }
   
@@ -93,6 +99,8 @@ bool isPushChannelValid(const PushChannel& ch) {
       return ch.url.length() > 0 && ch.key1.length() > 0;  // 需要URL和Token
     case PUSH_TYPE_TELEGRAM:
       return ch.key1.length() > 0 && ch.key2.length() > 0; // 需要Chat ID和Token
+    case PUSH_TYPE_MAILGUN:
+      return ch.key1.length() > 0 && ch.key2.length() > 0 && ch.key3.length() > 0; // 需要API Key、域名、收件人
     default:
       return false;
   }

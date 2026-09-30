@@ -72,6 +72,90 @@ bool checkAuth() {
   return true;
 }
 
+// 生成单个推送通道的表单 HTML。
+// 整页模板约 45KB，若把 5 个通道拼成一个大字符串再 replace("%PUSH_CHANNELS%")，
+// 需要同时持有旧页与新页（峰值内存翻倍），堆紧张时分配失败会留下 %PUSH_CHANNELS% 占位符；
+// 因此这里逐通道生成，由 handleRoot() 用分块传输依次发送。
+static String buildChannelForm(int i) {
+  String channelsHtml = "";
+  String idx = String(i);
+  String enabledClass = config.pushChannels[i].enabled ? " enabled" : "";
+  String checked = config.pushChannels[i].enabled ? " checked" : "";
+
+  channelsHtml += "<div class=\"push-channel" + enabledClass + "\" id=\"channel" + idx + "\">";
+  channelsHtml += "<div class=\"push-channel-header\">";
+  channelsHtml += "<input type=\"checkbox\" name=\"push" + idx + "en\" id=\"push" + idx + "en\" onchange=\"toggleChannel(" + idx + ")\"" + checked + ">";
+  channelsHtml += "<label for=\"push" + idx + "en\" class=\"label-inline\">启用推送通道 " + String(i + 1) + "</label>";
+  channelsHtml += "</div>";
+  channelsHtml += "<div class=\"push-channel-body\">";
+
+  // 通道名称
+  channelsHtml += "<div class=\"form-group\">";
+  channelsHtml += "<label>通道名称</label>";
+  channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + config.pushChannels[i].name + "\" placeholder=\"自定义名称\">";
+  channelsHtml += "</div>";
+
+  // 推送类型
+  channelsHtml += "<div class=\"form-group\">";
+  channelsHtml += "<label>推送方式</label>";
+  channelsHtml += "<select name=\"push" + idx + "type\" id=\"push" + idx + "type\" onchange=\"updateTypeHint(" + idx + ")\">";
+  channelsHtml += "<option value=\"1\"" + String(config.pushChannels[i].type == PUSH_TYPE_POST_JSON ? " selected" : "") + ">POST JSON（通用格式）</option>";
+  channelsHtml += "<option value=\"2\"" + String(config.pushChannels[i].type == PUSH_TYPE_BARK ? " selected" : "") + ">Bark（iOS推送）</option>";
+  channelsHtml += "<option value=\"3\"" + String(config.pushChannels[i].type == PUSH_TYPE_GET ? " selected" : "") + ">GET请求（参数在URL中）</option>";
+  channelsHtml += "<option value=\"4\"" + String(config.pushChannels[i].type == PUSH_TYPE_DINGTALK ? " selected" : "") + ">钉钉机器人</option>";
+  channelsHtml += "<option value=\"5\"" + String(config.pushChannels[i].type == PUSH_TYPE_PUSHPLUS ? " selected" : "") + ">PushPlus</option>";
+  channelsHtml += "<option value=\"6\"" + String(config.pushChannels[i].type == PUSH_TYPE_SERVERCHAN ? " selected" : "") + ">Server酱</option>";
+  channelsHtml += "<option value=\"7\"" + String(config.pushChannels[i].type == PUSH_TYPE_CUSTOM ? " selected" : "") + ">自定义模板</option>";
+  channelsHtml += "<option value=\"8\"" + String(config.pushChannels[i].type == PUSH_TYPE_FEISHU ? " selected" : "") + ">飞书机器人</option>";
+  channelsHtml += "<option value=\"9\"" + String(config.pushChannels[i].type == PUSH_TYPE_GOTIFY ? " selected" : "") + ">Gotify</option>";
+  channelsHtml += "<option value=\"10\"" + String(config.pushChannels[i].type == PUSH_TYPE_TELEGRAM ? " selected" : "") + ">Telegram Bot</option>";
+  channelsHtml += "<option value=\"11\"" + String(config.pushChannels[i].type == PUSH_TYPE_MAILGUN ? " selected" : "") + ">Mailgun（邮件 API）</option>";
+  channelsHtml += "</select>";
+  channelsHtml += "<div class=\"push-type-hint\" id=\"hint" + idx + "\"></div>";
+  channelsHtml += "</div>";
+
+  // URL
+  channelsHtml += "<div class=\"form-group\">";
+  channelsHtml += "<label>推送URL/Webhook</label>";
+  channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" id=\"url" + idx + "\" value=\"" + config.pushChannels[i].url + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
+  channelsHtml += "</div>";
+
+  // 额外参数区域（钉钉/PushPlus/Server酱/Mailgun 等需要）
+  channelsHtml += "<div id=\"extra" + idx + "\" style=\"display:none;\">";
+  channelsHtml += "<div class=\"form-group\">";
+  channelsHtml += "<label id=\"key1label" + idx + "\">参数1</label>";
+  channelsHtml += "<input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + config.pushChannels[i].key1 + "\">";
+  channelsHtml += "</div>";
+  channelsHtml += "<div class=\"form-group\" id=\"key2group" + idx + "\">";
+  channelsHtml += "<label id=\"key2label" + idx + "\">参数2</label>";
+  channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + config.pushChannels[i].key2 + "\">";
+  channelsHtml += "</div>";
+  channelsHtml += "<div class=\"form-group\" id=\"key3group" + idx + "\" style=\"display:none;\">";
+  channelsHtml += "<label id=\"key3label" + idx + "\">参数3</label>";
+  channelsHtml += "<input type=\"text\" name=\"push" + idx + "key3\" id=\"key3" + idx + "\" value=\"" + config.pushChannels[i].key3 + "\">";
+  channelsHtml += "</div>";
+  channelsHtml += "<div class=\"form-group\" id=\"key4group" + idx + "\" style=\"display:none;\">";
+  channelsHtml += "<label id=\"key4label" + idx + "\">参数4</label>";
+  channelsHtml += "<input type=\"text\" name=\"push" + idx + "key4\" id=\"key4" + idx + "\" value=\"" + config.pushChannels[i].key4 + "\">";
+  channelsHtml += "</div>";
+  channelsHtml += "<div class=\"form-group\" id=\"key5group" + idx + "\" style=\"display:none;\">";
+  channelsHtml += "<label id=\"key5label" + idx + "\">参数5</label>";
+  channelsHtml += "<input type=\"text\" name=\"push" + idx + "key5\" id=\"key5" + idx + "\" value=\"" + config.pushChannels[i].key5 + "\">";
+  channelsHtml += "</div>";
+  channelsHtml += "</div>";
+
+  // 自定义模板区域（Mailgun 下复用为正文 HTML 模板）
+  channelsHtml += "<div id=\"custom" + idx + "\" style=\"display:none;\">";
+  channelsHtml += "<div class=\"form-group\">";
+  channelsHtml += "<label id=\"bodylabel" + idx + "\">请求体模板（使用 {sender} {message} {timestamp} {sender_name} {verify_code} {sender_display} 占位符）</label>";
+  channelsHtml += "<textarea name=\"push" + idx + "body\" id=\"body" + idx + "\" rows=\"6\" style=\"width:100%;font-family:monospace;\">" + config.pushChannels[i].customBody + "</textarea>";
+  channelsHtml += "</div>";
+  channelsHtml += "</div>";
+
+  channelsHtml += "</div></div>";
+  return channelsHtml;
+}
+
 // 处理配置页面请求
 void handleRoot() {
   if (!checkAuth()) return;
@@ -117,78 +201,31 @@ void handleRoot() {
   }
   html.replace("%PUSH_COUNT%", String(pushCount));
   
-  // 生成推送通道HTML
-  String channelsHtml = "";
-  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
-    String idx = String(i);
-    String enabledClass = config.pushChannels[i].enabled ? " enabled" : "";
-    String checked = config.pushChannels[i].enabled ? " checked" : "";
-    
-    channelsHtml += "<div class=\"push-channel" + enabledClass + "\" id=\"channel" + idx + "\">";
-    channelsHtml += "<div class=\"push-channel-header\">";
-    channelsHtml += "<input type=\"checkbox\" name=\"push" + idx + "en\" id=\"push" + idx + "en\" onchange=\"toggleChannel(" + idx + ")\"" + checked + ">";
-    channelsHtml += "<label for=\"push" + idx + "en\" class=\"label-inline\">启用推送通道 " + String(i + 1) + "</label>";
-    channelsHtml += "</div>";
-    channelsHtml += "<div class=\"push-channel-body\">";
-    
-    // 通道名称
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>通道名称</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + config.pushChannels[i].name + "\" placeholder=\"自定义名称\">";
-    channelsHtml += "</div>";
-    
-    // 推送类型
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>推送方式</label>";
-    channelsHtml += "<select name=\"push" + idx + "type\" id=\"push" + idx + "type\" onchange=\"updateTypeHint(" + idx + ")\">";
-    channelsHtml += "<option value=\"1\"" + String(config.pushChannels[i].type == PUSH_TYPE_POST_JSON ? " selected" : "") + ">POST JSON（通用格式）</option>";
-    channelsHtml += "<option value=\"2\"" + String(config.pushChannels[i].type == PUSH_TYPE_BARK ? " selected" : "") + ">Bark（iOS推送）</option>";
-    channelsHtml += "<option value=\"3\"" + String(config.pushChannels[i].type == PUSH_TYPE_GET ? " selected" : "") + ">GET请求（参数在URL中）</option>";
-    channelsHtml += "<option value=\"4\"" + String(config.pushChannels[i].type == PUSH_TYPE_DINGTALK ? " selected" : "") + ">钉钉机器人</option>";
-    channelsHtml += "<option value=\"5\"" + String(config.pushChannels[i].type == PUSH_TYPE_PUSHPLUS ? " selected" : "") + ">PushPlus</option>";
-    channelsHtml += "<option value=\"6\"" + String(config.pushChannels[i].type == PUSH_TYPE_SERVERCHAN ? " selected" : "") + ">Server酱</option>";
-    channelsHtml += "<option value=\"7\"" + String(config.pushChannels[i].type == PUSH_TYPE_CUSTOM ? " selected" : "") + ">自定义模板</option>";
-    channelsHtml += "<option value=\"8\"" + String(config.pushChannels[i].type == PUSH_TYPE_FEISHU ? " selected" : "") + ">飞书机器人</option>";
-    channelsHtml += "<option value=\"9\"" + String(config.pushChannels[i].type == PUSH_TYPE_GOTIFY ? " selected" : "") + ">Gotify</option>";
-    channelsHtml += "<option value=\"10\"" + String(config.pushChannels[i].type == PUSH_TYPE_TELEGRAM ? " selected" : "") + ">Telegram Bot</option>";
-    channelsHtml += "</select>";
-    channelsHtml += "<div class=\"push-type-hint\" id=\"hint" + idx + "\"></div>";
-    channelsHtml += "</div>";
-    
-    // URL
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>推送URL/Webhook</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" id=\"url" + idx + "\" value=\"" + config.pushChannels[i].url + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
-    channelsHtml += "</div>";
-    
-    // 额外参数区域（钉钉/PushPlus/Server酱等需要）
-    channelsHtml += "<div id=\"extra" + idx + "\" style=\"display:none;\">";
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label id=\"key1label" + idx + "\">参数1</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + config.pushChannels[i].key1 + "\">";
-    channelsHtml += "</div>";
-    channelsHtml += "<div class=\"form-group\" id=\"key2group" + idx + "\">";
-    channelsHtml += "<label id=\"key2label" + idx + "\">参数2</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + config.pushChannels[i].key2 + "\">";
-    channelsHtml += "</div>";
-    channelsHtml += "</div>";
-    
-    // 自定义模板区域
-    channelsHtml += "<div id=\"custom" + idx + "\" style=\"display:none;\">";
-    channelsHtml += "<div class=\"form-group\">";
-    channelsHtml += "<label>请求体模板（使用 {sender} {message} {timestamp} {sender_name} {verify_code} {sender_display} 占位符）</label>";
-    channelsHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + config.pushChannels[i].customBody + "</textarea>";
-    channelsHtml += "</div>";
-    channelsHtml += "</div>";
-    
-    channelsHtml += "</div></div>";
-  }
-  html.replace("%PUSH_CHANNELS%", channelsHtml);
-  
+  // 推送通道表单：逐通道分块发送（见 buildChannelForm 说明）
+  // 整页模板约 45KB，若拼成整块再 replace("%PUSH_CHANNELS%") 需要同时持有旧页与新页，
+  // 堆紧张时会分配失败，页面上就会残留未替换的占位符。
+  int pushPos = html.indexOf("%PUSH_CHANNELS%");
+
   // 禁用缓存：固件更新后确保浏览器拉取新版页面，避免旧版 UI 与新固件不匹配
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "0");
+
+  if (pushPos >= 0) {
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html", "");
+    server.sendContent(html.c_str(), (size_t)pushPos);   // 前半段：直接引用原缓冲，不额外拷贝
+    for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
+      server.sendContent(buildChannelForm(i));
+    }
+    // 后半段：跳过 "%PUSH_CHANNELS%"（15 字符）
+    server.sendContent(html.c_str() + pushPos + 15, (size_t)(html.length() - pushPos - 15));
+    server.sendContent("");                             // 结束分块传输
+    return;
+  }
+
+  // 模板缺少占位符（不应发生）：整页发送，避免页面出现未替换的占位符
+  logCaptureLn(String("页面模板缺少 PUSH_CHANNELS 占位符"));
   server.send(200, "text/html", html);
 }
 
@@ -895,10 +932,14 @@ void handleSave() {
     String nameKey = "push" + idx + "name";
     String k1Key = "push" + idx + "key1";
     String k2Key = "push" + idx + "key2";
+    String k3Key = "push" + idx + "key3";
+    String k4Key = "push" + idx + "key4";
+    String k5Key = "push" + idx + "key5";
     String bodyKey = "push" + idx + "body";
     // 只要该通道的任一字段存在，就更新整个通道
     if (server.hasArg(enKey) || server.hasArg(typeKey) || server.hasArg(urlKey) ||
         server.hasArg(nameKey) || server.hasArg(k1Key) || server.hasArg(k2Key) ||
+        server.hasArg(k3Key) || server.hasArg(k4Key) || server.hasArg(k5Key) ||
         server.hasArg(bodyKey)) {
       config.pushChannels[i].enabled = server.arg(enKey) == "on";
       config.pushChannels[i].type = (PushType)server.arg(typeKey).toInt();
@@ -906,6 +947,9 @@ void handleSave() {
       config.pushChannels[i].name = server.arg(nameKey);
       config.pushChannels[i].key1 = server.arg(k1Key);
       config.pushChannels[i].key2 = server.arg(k2Key);
+      config.pushChannels[i].key3 = server.arg(k3Key);
+      config.pushChannels[i].key4 = server.arg(k4Key);
+      config.pushChannels[i].key5 = server.arg(k5Key);
       config.pushChannels[i].customBody = server.arg(bodyKey);
       if (config.pushChannels[i].name.length() == 0) {
         config.pushChannels[i].name = "通道" + String(i + 1);

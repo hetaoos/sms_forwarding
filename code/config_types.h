@@ -15,7 +15,9 @@ enum PushType {
   PUSH_TYPE_CUSTOM = 7,    // 自定义模板
   PUSH_TYPE_FEISHU = 8,    // 飞书机器人
   PUSH_TYPE_GOTIFY = 9,    // Gotify
-  PUSH_TYPE_TELEGRAM = 10  // Telegram Bot
+  PUSH_TYPE_TELEGRAM = 10, // Telegram Bot
+  PUSH_TYPE_MAILGUN = 11   // Mailgun 邮件 API（url=基址, key1=API Key, key2=域名, key3=收件人,
+                           // key4=发件人[可选], key5=标题模板[可选], customBody=正文 HTML 模板[可选]）
 };
 
 // 最大推送通道数
@@ -29,7 +31,11 @@ struct PushChannel {
   String url;             // 推送URL（webhook地址）
   String key1;            // 额外参数1（如：钉钉secret、pushplus token等）
   String key2;            // 额外参数2（备用）
-  String customBody;      // 自定义请求体模板（使用 {sender} {message} {timestamp} {sender_name} {verify_code} {sender_display} 占位符）
+  String key3;            // 额外参数3（Mailgun：收件人，支持逗号/分号分隔多个）
+  String key4;            // 额外参数4（Mailgun：发件人，留空自动派生为 SMS Notification <sms@域名>）
+  String key5;            // 额外参数5（Mailgun：邮件标题模板，留空用默认标题）
+  String customBody;      // 自定义请求体模板（自定义类型使用 {sender} {message} {timestamp} {sender_name} {verify_code} {sender_display} 占位符）
+                          // Mailgun 类型下复用为「正文 HTML 模板」，留空用默认 HTML 邮件正文
 };
 
 // 配置参数结构体

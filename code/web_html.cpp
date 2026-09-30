@@ -530,7 +530,7 @@ const char* htmlPage = R"rawliteral(
       var urlInput = document.getElementById('url' + idx);
       if (urlInput) {
         var defUrls = {4:'https://oapi.dingtalk.com/robot/send',5:'http://www.pushplus.plus/send',8:'https://open.feishu.cn/open-apis/bot/v2/hook/',10:'https://api.telegram.org'};
-        var urlPhs = {1:'http://your-server.com/api',2:'https://api.day.app/你的Key（或自建服务器地址）',3:'http://your-server.com/api',6:'留空将自动用 SendKey 拼接官方接口',7:'http://your-server.com/api',9:'https://你的Gotify服务器地址'};
+        var urlPhs = {1:'http://your-server.com/api',2:'https://api.day.app/你的Key（或自建服务器地址）',3:'http://your-server.com/api',6:'留空将自动用 SendKey 拼接官方接口',7:'http://your-server.com/api',9:'https://你的Gotify服务器地址',11:'留空使用 https://api.mailgun.net（EU 区域填 https://api.eu.mailgun.net）'};
         var cur = urlInput.value;
         var isDefaultVal = false;
         for (var k in defUrls) { if (defUrls[k] === cur) { isDefaultVal = true; break; } }
@@ -544,6 +544,12 @@ const char* htmlPage = R"rawliteral(
       document.getElementById('key2' + idx).placeholder = '';
       var kg = document.getElementById('key2group' + idx);
       if (kg) kg.style.display = 'none';
+      ['key3','key4','key5'].forEach(function(k) {
+        var g = document.getElementById(k + 'group' + idx);
+        if (g) g.style.display = 'none';
+      });
+      var bl = document.getElementById('bodylabel' + idx);
+      if (bl) bl.innerText = '请求体模板（使用 {sender} {message} {timestamp} {sender_name} {verify_code} {sender_display} 占位符）';
       if (type == 1) hint.innerHTML = 'POST JSON<br>{<br>&nbsp;"sender":"+8613800138000",<br>&nbsp;"message":"短信内容",<br>&nbsp;"timestamp":"2026-01-01 12:00:00",<br>&nbsp;"sender_name":"发送者名称",<br>&nbsp;"verify_code":"123456",<br>&nbsp;"sender_display":"显示名称"<br>}';
       else if (type == 2) hint.innerHTML = 'Bark (iOS)<br>POST {"title":"标题或验证码","body":"短信内容（含发送者/验证码）"}';
       else if (type == 3) hint.innerHTML = 'GET 请求<br>URL?sender=xxx&message=xxx&timestamp=xxx&sender_name=xxx&verify_code=xxx&sender_display=xxx';
@@ -554,6 +560,7 @@ const char* htmlPage = R"rawliteral(
       else if (type == 8) { hint.innerHTML = '飞书机器人<br>已预填官方地址，需在其末尾拼接你的 Hook Token；签名验证另填 Secret（详见上方占位符说明）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（签名密钥，可选）'; document.getElementById('key1'+idx).placeholder='飞书签名密钥'; }
       else if (type == 9) { hint.innerHTML = 'Gotify<br>填写服务器地址 + 应用 Token（标题含验证码/发送者，正文含内容）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token（应用 Token）'; document.getElementById('key1'+idx).placeholder='A...'; }
       else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2），消息含发送者/验证码/内容'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
+      else if (type == 11) { hint.innerHTML = 'Mailgun 邮件 API<br>POST &lt;基址&gt;/v3/&lt;域名&gt;/messages，Basic 认证 api:API Key<br>URL 留空用 https://api.mailgun.net，EU 区域填 https://api.eu.mailgun.net<br>参数1=API Key，参数2=域名，参数3=收件人（多个用逗号或分号分隔）<br>参数4=发件人（留空为 SMS Notification &lt;sms@域名&gt;）<br>参数5=标题模板（留空用默认标题）<br>正文模板为完整 HTML（留空用默认 HTML 邮件正文）<br>占位符：{sender} {sender_name} {verify_code} {timestamp} {message} {sender_display}'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='API Key'; document.getElementById('key1'+idx).placeholder='key-xxxxxxxx'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='域名'; document.getElementById('key2'+idx).placeholder='mg.example.com'; var g3=document.getElementById('key3group'+idx); if(g3)g3.style.display='block'; document.getElementById('key3label'+idx).innerText='收件人'; document.getElementById('key3'+idx).placeholder='you@example.com（多个用逗号分隔）'; var g4=document.getElementById('key4group'+idx); if(g4)g4.style.display='block'; document.getElementById('key4label'+idx).innerText='发件人（可选）'; document.getElementById('key4'+idx).placeholder='留空用 SMS Notification <sms@域名>'; var g5=document.getElementById('key5group'+idx); if(g5)g5.style.display='block'; document.getElementById('key5label'+idx).innerText='标题模板（可选）'; document.getElementById('key5'+idx).placeholder='留空用默认标题，可用 {sender_name} {verify_code}'; custom.style.display='block'; bl.innerText='正文模板（完整 HTML，留空用默认 HTML 邮件正文；占位符 {sender} {sender_name} {verify_code} {timestamp} {message} {sender_display}）'; }
     }
     document.addEventListener('DOMContentLoaded', function() {
       for (var i = 0; i < 5; i++) { toggleChannel(i); updateTypeHint(i); }

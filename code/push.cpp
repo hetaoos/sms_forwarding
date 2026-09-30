@@ -24,6 +24,8 @@ static bool emailConfigured() {
                                         // 把整个主循环卡死两分钟；库未暴露该选项，
                                         // 只能在它重设之后再次覆盖底层 socket 超时。
 #define NOTIFY_JOB_DEADLINE_MS  180000UL // 单条通知的整体时限，超时丢弃，避免弱网时长期占住队列
+#define MAILGUN_TIMEOUT_MS      15000  // Mailgun：走 TLS 且要上传 HTML 正文，单次请求上限比普通通道放宽
+#define MAILGUN_HTML_MAX_CHARS  6000   // Mailgun：HTML 正文上限，超出只发纯文本（urlEncode 后体积会膨胀数倍）
 
 // 覆盖底层 socket 超时（ReadyMail 在认证后会把超时重设为 120 秒，需要再次压回来）
 static void applySmtpSocketTimeout() {
@@ -403,6 +405,7 @@ static bool isBodySuccess(const PushChannel& channel, const String& resp) {
     case PUSH_TYPE_PUSHPLUS:   return resp.indexOf("\"code\":200") >= 0;
     case PUSH_TYPE_SERVERCHAN: return resp.indexOf("\"code\":0") >= 0;
     case PUSH_TYPE_TELEGRAM:   return resp.indexOf("\"ok\":true") >= 0;
+    case PUSH_TYPE_MAILGUN:    return resp.indexOf("Queued") >= 0; // 成功返回 {"id":"...","message":"Queued. Thank you."}
     default:                   return true; // 其余平台以 HTTP 状态码为准
   }
 }
@@ -410,9 +413,12 @@ static bool isBodySuccess(const PushChannel& channel, const String& resp) {
 // 执行单个通道的 HTTP 请求。
 // maxAttempts=1 时只发一次请求、不做退避 delay，供异步队列在主循环里分片调用：
 // 每次 processNotifyQueue() 只推进一次网络请求，退避交给队列的时间戳调度完成。
+// authUser/authPass 非空时附加 HTTP Basic 认证（Mailgun 用 api:API_KEY）；timeoutMs 可覆盖默认超时
 static NotifyStep executeChannelRequest(const PushChannel& channel, const String& url,
                                         bool isGet, const String& contentType, const String& body,
-                                        const String& channelName, int maxAttempts) {
+                                        const String& channelName, int maxAttempts,
+                                        const String& authUser = "", const String& authPass = "",
+                                        int timeoutMs = HTTP_TIMEOUT_MS) {
   for (int attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1) {
       delay(500 * (attempt - 1)); // 退避：第2次前等0.5秒，第3次前等1秒
@@ -422,7 +428,12 @@ static NotifyStep executeChannelRequest(const PushChannel& channel, const String
     HTTPClient http;
     http.begin(url);
     // 显式设置超时：默认行为在网络差时可能长时间不返回，把主循环整个拖住
-    http.setTimeout(HTTP_TIMEOUT_MS);
+    http.setTimeout(timeoutMs);
+    if (authUser.length() > 0) {
+      // HTTP Basic 认证：Authorization: Basic base64(user:pass)
+      String cred = authUser + ":" + authPass;
+      http.addHeader("Authorization", "Basic " + base64::encode((const uint8_t*)cred.c_str(), cred.length()));
+    }
     if (!isGet) http.addHeader("Content-Type", contentType);
     int httpCode = isGet ? http.GET() : http.POST(body);
 
@@ -457,6 +468,36 @@ static NotifyStep executeChannelRequest(const PushChannel& channel, const String
 
   logCaptureLn(String("[" + channelName + "] 多次重试后仍失败"));
   return STEP_RETRY;
+}
+
+// 短信邮件正文构建（定义在本文件后段，供 Mailgun 等通道取默认标题/正文）
+static void buildSmsMail(const char* sender, const char* message, const char* timestamp,
+                         String& subject, String& html);
+
+// 模板占位符替换：{sender} {sender_name} {verify_code} {timestamp} {message} {sender_display}
+// escapeValues=true 时对填入值做 HTML 转义（正文是 HTML 上下文，短信内容可能含 < & 等字符）
+static String applySmsTemplate(const String& tpl, const char* sender, const char* message,
+                               const char* timestamp, const String& senderName,
+                               const String& verifyCode, const String& displayName,
+                               bool escapeValues) {
+  String s(sender), m(message), t(timestamp);
+  String sn = senderName, vc = verifyCode, dn = displayName;
+  if (escapeValues) {
+    s = htmlEscape(s);
+    m = htmlEscape(m);
+    t = htmlEscape(t);
+    sn = htmlEscape(sn);
+    vc = htmlEscape(vc);
+    dn = htmlEscape(dn);
+  }
+  String out = tpl;
+  out.replace("{sender}", s);
+  out.replace("{sender_name}", sn);
+  out.replace("{verify_code}", vc);
+  out.replace("{timestamp}", t);
+  out.replace("{message}", m);
+  out.replace("{sender_display}", dn);
+  return out;
 }
 
 // 发送单个推送通道（统一构建请求参数，由 executeChannelRequest 执行）
@@ -508,6 +549,9 @@ NotifyStep sendToChannel(const PushChannel& channel, const char* sender, const c
   String reqBody = "";
   String reqContentType = "application/json";
   bool useGet = false;
+  String authUser = "";         // HTTP Basic 认证用户名（Mailgun 固定为 api）
+  String authPass = "";         // HTTP Basic 认证密码（Mailgun 为 API Key）
+  int timeoutMs = HTTP_TIMEOUT_MS;
 
   switch (channel.type) {
     case PUSH_TYPE_POST_JSON: {
@@ -705,12 +749,83 @@ NotifyStep sendToChannel(const PushChannel& channel, const char* sender, const c
       break;
     }
 
+    case PUSH_TYPE_MAILGUN: {
+      // Mailgun 邮件 API（curl 形态：POST <基址>/v3/<域名>/messages，Basic 认证 api:API_KEY）
+      // key1=API Key, key2=域名, key3=收件人, key4=发件人(可选), key5=标题模板(可选), customBody=正文 HTML 模板(可选)
+      if (channel.key1.length() == 0 || channel.key2.length() == 0 || channel.key3.length() == 0) {
+        logCaptureLn(String("[Mailgun] 配置不完整（需 API Key / 域名 / 收件人），跳过"));
+        return STEP_OK;
+      }
+
+      // 基址：留空用官方美国节点；EU 区域需填 https://api.eu.mailgun.net
+      String base = channel.url;
+      base.trim();
+      if (base.length() == 0) base = "https://api.mailgun.net";
+      if (!base.startsWith("http://") && !base.startsWith("https://")) base = "https://" + base;
+      while (base.endsWith("/")) base.remove(base.length() - 1);
+
+      String domain = channel.key2;
+      domain.trim();
+      reqUrl = base + "/v3/" + domain + "/messages";
+
+      // 发件人：留空时按官方示例派生为 SMS Notification <sms@域名>
+      String from = channel.key4;
+      from.trim();
+      if (from.length() == 0) from = "SMS Notification <sms@" + domain + ">";
+
+      // 标题与正文：模板留空时回退到与邮件通知相同的默认内容
+      String defSubject, defHtml;
+      if (channel.key5.length() == 0 || channel.customBody.length() == 0) {
+        buildSmsMail(sender, message, timestamp, defSubject, defHtml);
+      }
+      String subject = channel.key5.length() > 0
+        ? applySmsTemplate(channel.key5, sender, message, timestamp, senderNameStr, verifyCodeStr, displayNameStr, false)
+        : defSubject;
+      // 正文是 HTML 上下文：模板里的占位符值需要转义，避免短信内容中的 < & 破坏结构
+      String htmlBody = channel.customBody.length() > 0
+        ? applySmsTemplate(channel.customBody, sender, message, timestamp, senderNameStr, verifyCodeStr, displayNameStr, true)
+        : defHtml;
+
+      reqContentType = "application/x-www-form-urlencoded; charset=utf-8";
+      reqBody = "from=" + urlEncode(from);
+
+      // 收件人支持逗号/分号分隔，拆成多个 to 参数
+      String tos = channel.key3;
+      tos.replace(";", ",");
+      int pos = 0;
+      while (pos <= tos.length()) {
+        int next = tos.indexOf(',', pos);
+        if (next < 0) next = tos.length();
+        String one = tos.substring(pos, next);
+        one.trim();
+        if (one.length() > 0) reqBody += "&to=" + urlEncode(one);
+        pos = next + 1;
+      }
+
+      reqBody += "&subject=" + urlEncode(subject);
+      if (htmlBody.length() <= MAILGUN_HTML_MAX_CHARS) {
+        reqBody += "&html=" + urlEncode(htmlBody);
+      } else {
+        logCaptureLn(String("[Mailgun] HTML 正文过长，本次仅发送纯文本"));
+      }
+      reqBody += "&text=" + urlEncode(notifyText);   // 纯文本兜底，供不支持 HTML 的客户端
+
+      authUser = "api";
+      authPass = channel.key1;
+      timeoutMs = MAILGUN_TIMEOUT_MS;
+
+      // 不要把 API Key（Basic 认证头）和完整请求体写进日志：Web 端日志对所有人可见
+      logCaptureLn(String("Mailgun: " + domain + " 主题=" + subject));
+      break;
+    }
+
     default:
       logCaptureLn(String("未知推送类型"));
       return STEP_OK;
   }
 
-  return executeChannelRequest(channel, reqUrl, useGet, reqContentType, reqBody, channelName, maxAttempts);
+  return executeChannelRequest(channel, reqUrl, useGet, reqContentType, reqBody, channelName, maxAttempts,
+                               authUser, authPass, timeoutMs);
 }
 
 // ===================== 异步通知队列 =====================
