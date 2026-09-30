@@ -135,6 +135,73 @@ String jsonEscape(const String& str) {
   return result;
 }
 
+// 扫描某一类括号的全部出现，按"到最近边缘的距离"更新最优候选
+// open/close 为括号字符串（多字节需注意字节长度 openLen/closeLen），其余参数为输入输出的最优候选
+static void scanBracket(const String& msg, const char* open, int openLen, const char* close, int closeLen,
+                        int& bestDist, int& bestSegStart, int& bestCStart, int& bestCEnd) {
+  int n = msg.length();
+  int pos = 0;
+  while (pos < n) {
+    int o = msg.indexOf(open, pos);
+    if (o < 0) break;
+    int c = msg.indexOf(close, o + openLen);
+    if (c < 0) break;
+    int contentStart = o + openLen;   // 括号内纯内容起点（跳过整个开括号）
+    int contentEnd = c;               // 闭括号起点（不含闭括号）
+    if (contentEnd > contentStart) {
+      int segStart = o;
+      int segEnd = c + closeLen;
+      // 到最近边缘（开头或结尾）的距离，越小越优先
+      int dist = (segStart < (n - segEnd)) ? segStart : (n - segEnd);
+      if (dist < bestDist || (dist == bestDist && segStart < bestSegStart)) {
+        bestDist = dist;
+        bestSegStart = segStart;
+        bestCStart = contentStart;
+        bestCEnd = contentEnd;
+      }
+    }
+    pos = c + closeLen;
+  }
+}
+
+// 从短信正文解析发送者名称与验证码
+// 发送者名称：扫描全部【...】/[[...]]/[...]，优先选取最靠近开头或结尾的括号内容；无则空串
+// 验证码：取首个长度 4~6 的连续数字串（等价于"前后不为其他数字"），无则空串
+void parseSmsMeta(const String& message, String& senderName, String& verifyCode) {
+  senderName = "";
+  verifyCode = "";
+
+  // 1) 发送者名称：优先最靠近边缘的中括号内容
+  int n = message.length();
+  int bestDist = 0x7FFFFFFF;
+  int bestSegStart = 0x7FFFFFFF;
+  int bestCStart = -1, bestCEnd = -1;
+  scanBracket(message, "【", 3, "】", 3, bestDist, bestSegStart, bestCStart, bestCEnd);
+  scanBracket(message, "[[", 2, "]]", 2, bestDist, bestSegStart, bestCStart, bestCEnd);
+  scanBracket(message, "[", 1, "]", 1, bestDist, bestSegStart, bestCStart, bestCEnd);
+  if (bestCStart >= 0 && bestCEnd > bestCStart) {
+    senderName = message.substring(bestCStart, bestCEnd);
+    senderName.trim();
+  }
+
+  // 2) 验证码：首个长度 4~6 的连续数字串
+  int i = 0;
+  while (i < n) {
+    if (isdigit((unsigned char)message.charAt(i))) {
+      int j = i;
+      while (j < n && isdigit((unsigned char)message.charAt(j))) j++;
+      int len = j - i;
+      if (len >= 4 && len <= 6) {
+        verifyCode = message.substring(i, j);
+        break;
+      }
+      i = j;
+    } else {
+      i++;
+    }
+  }
+}
+
 // 判断业务响应体是否表示成功
 // 部分平台无论成败 HTTP 都返回 200，错误信息在响应体中，需要额外校验
 static bool isBodySuccess(const PushChannel& channel, const String& resp) {
@@ -198,7 +265,8 @@ static bool executeChannelRequest(const PushChannel& channel, const String& url,
 }
 
 // 发送单个推送通道（统一构建请求参数，由 executeChannelRequest 执行并自动重试）
-void sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp) {
+void sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp,
+                   const char* senderName, const char* verifyCode) {
   if (!channel.enabled) return;
 
   // 对于某些推送方式，URL可以为空（使用默认URL）
@@ -213,6 +281,32 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
   String senderEscaped = jsonEscape(String(sender));
   String messageEscaped = jsonEscape(String(message));
   String timestampEscaped = jsonEscape(String(timestamp));
+  String senderNameEscaped = jsonEscape(String(senderName));
+  String verifyCodeEscaped = jsonEscape(String(verifyCode));
+  String senderNameStr = String(senderName);
+  String verifyCodeStr = String(verifyCode);
+  // 优化后的发送者名称：优先 sender_name，为空时回退到 sender
+  String displayNameStr = senderNameStr.length() > 0 ? senderNameStr : String(sender);
+  String displayNameEscaped = jsonEscape(displayNameStr);
+
+  // 统一的富文本（含发送者名称与验证码），供文本类通道使用
+  String notifyText = "📱短信通知\n发送者: " + String(sender);
+  if (senderNameStr.length() > 0) notifyText += " (" + senderNameStr + ")";
+  notifyText += "\n内容: " + String(message);
+  if (verifyCodeStr.length() > 0) notifyText += "\n验证码: " + verifyCodeStr;
+  notifyText += "\n时间: " + String(timestamp);
+  String notifyTextEscaped = jsonEscape(notifyText);
+
+  // 统一标题（参考 send_notification.sh：验证码优先入标题）
+  String titleText;
+  if (verifyCodeStr.length() > 0) {
+    titleText = "验证码: " + verifyCodeStr + " 来自 " + (senderNameStr.length() > 0 ? senderNameStr : String(sender));
+  } else if (senderNameStr.length() > 0) {
+    titleText = "来自 " + senderNameStr + " 的短信";
+  } else {
+    titleText = "来自 " + String(sender) + " 的短信";
+  }
+  String titleEscaped = jsonEscape(titleText);
 
   String reqUrl = "";
   String reqBody = "";
@@ -226,7 +320,10 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       reqBody = "{";
       reqBody += "\"sender\":\"" + senderEscaped + "\",";
       reqBody += "\"message\":\"" + messageEscaped + "\",";
-      reqBody += "\"timestamp\":\"" + timestampEscaped + "\"";
+      reqBody += "\"timestamp\":\"" + timestampEscaped + "\",";
+      reqBody += "\"sender_name\":\"" + senderNameEscaped + "\",";
+      reqBody += "\"verify_code\":\"" + verifyCodeEscaped + "\",";
+      reqBody += "\"sender_display\":\"" + displayNameEscaped + "\"";
       reqBody += "}";
       logCaptureLn(String("POST JSON: " + reqBody));
       break;
@@ -236,9 +333,11 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       // Bark推送格式
       reqUrl = channel.url;
       reqBody = "{";
-      reqBody += "\"title\":\"" + senderEscaped + "\",";
-      reqBody += "\"body\":\"" + messageEscaped + "\"";
-      reqBody += "}";
+      reqBody += "\"title\":\"" + titleEscaped + "\",";
+      reqBody += "\"body\":\"" + messageEscaped;
+      if (senderNameStr.length() > 0) reqBody += "\\n发件人: " + senderNameEscaped;
+      if (verifyCodeStr.length() > 0) reqBody += "\\n验证码: " + verifyCodeEscaped;
+      reqBody += "\"}";
       logCaptureLn(String("BARK JSON: " + reqBody));
       break;
     }
@@ -254,6 +353,9 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       getUrl += "sender=" + urlEncode(String(sender));
       getUrl += "&message=" + urlEncode(String(message));
       getUrl += "&timestamp=" + urlEncode(String(timestamp));
+      getUrl += "&sender_name=" + urlEncode(senderNameStr);
+      getUrl += "&verify_code=" + urlEncode(verifyCodeStr);
+      getUrl += "&sender_display=" + urlEncode(displayNameStr);
       logCaptureLn(String("GET URL: " + getUrl));
       reqUrl = getUrl;
       useGet = true;
@@ -279,7 +381,7 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       }
       reqUrl = webhookUrl;
       reqBody = "{\"msgtype\":\"text\",\"text\":{\"content\":\"";
-      reqBody += "📱短信通知\\n发送者: " + senderEscaped + "\\n内容: " + messageEscaped + "\\n时间: " + timestampEscaped;
+      reqBody += notifyTextEscaped;
       reqBody += "\"}}";
       logCaptureLn(String("钉钉: " + reqBody));
       break;
@@ -300,8 +402,8 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       }
       reqBody = "{";
       reqBody += "\"token\":\"" + channel.key1 + "\",";
-      reqBody += "\"title\":\"短信来自: " + senderEscaped + "\",";
-      reqBody += "\"content\":\"<b>发送者:</b> " + senderEscaped + "<br><b>时间:</b> " + timestampEscaped + "<br><b>内容:</b><br>" + messageEscaped + "\",";
+      reqBody += "\"title\":\"" + titleEscaped + "\",";
+      reqBody += "\"content\":\"<b>发送者:</b> " + senderEscaped + (senderNameStr.length() > 0 ? " (<b>" + senderNameEscaped + "</b>)" : "") + "<br><b>时间:</b> " + timestampEscaped + (verifyCodeStr.length() > 0 ? "<br><b>验证码:</b> " + verifyCodeEscaped : "") + "<br><b>内容:</b><br>" + messageEscaped + "\",";
       reqBody += "\"channel\":\"" + channelValue + "\"";
       reqBody += "}";
       logCaptureLn(String("PushPlus: " + reqBody));
@@ -312,8 +414,8 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       // Server酱
       reqUrl = channel.url.length() > 0 ? channel.url : ("https://sctapi.ftqq.com/" + channel.key1 + ".send");
       reqContentType = "application/x-www-form-urlencoded";
-      reqBody = "title=" + urlEncode("短信来自: " + String(sender));
-      reqBody += "&desp=" + urlEncode("**发送者:** " + String(sender) + "\n\n**时间:** " + String(timestamp) + "\n\n**内容:**\n\n" + String(message));
+      reqBody = "title=" + urlEncode(titleText);
+      reqBody += "&desp=" + urlEncode("**发送者:** " + String(sender) + (senderNameStr.length() > 0 ? " (" + senderNameStr + ")" : "") + "\n\n**时间:** " + String(timestamp) + (verifyCodeStr.length() > 0 ? "\n\n**验证码:** " + verifyCodeStr : "") + "\n\n**内容:**\n\n" + String(message));
       logCaptureLn(String("Server酱: " + reqBody));
       break;
     }
@@ -329,6 +431,9 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       reqBody.replace("{sender}", senderEscaped);
       reqBody.replace("{message}", messageEscaped);
       reqBody.replace("{timestamp}", timestampEscaped);
+      reqBody.replace("{sender_name}", senderNameEscaped);
+      reqBody.replace("{verify_code}", verifyCodeEscaped);
+      reqBody.replace("{sender_display}", displayNameEscaped);
       logCaptureLn(String("自定义: " + reqBody));
       break;
     }
@@ -358,7 +463,7 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       // 飞书消息体
       jsonData += "\"msg_type\":\"text\",";
       jsonData += "\"content\":{\"text\":\"";
-      jsonData += "📱短信通知\\n发送者: " + senderEscaped + "\\n内容: " + messageEscaped + "\\n时间: " + timestampEscaped;
+      jsonData += notifyTextEscaped;
       jsonData += "\"}}";
 
       reqUrl = channel.url;
@@ -376,8 +481,11 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
 
       reqUrl = gotifyUrl;
       reqBody = "{";
-      reqBody += "\"title\":\"短信来自: " + senderEscaped + "\",";
-      reqBody += "\"message\":\"" + messageEscaped + "\\n\\n时间: " + timestampEscaped + "\",";
+      reqBody += "\"title\":\"" + titleEscaped + "\",";
+      reqBody += "\"message\":\"" + messageEscaped;
+      if (senderNameStr.length() > 0) reqBody += "\\n\\n发件人: " + senderNameEscaped;
+      if (verifyCodeStr.length() > 0) reqBody += "\\n\\n验证码: " + verifyCodeEscaped;
+      reqBody += "\",";
       reqBody += "\"priority\":5";
       reqBody += "}";
       logCaptureLn(String("Gotify: " + reqBody));
@@ -391,7 +499,7 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
 
       reqUrl = tgBaseUrl + "/bot" + channel.key2 + "/sendMessage";
 
-      String text = "📱短信通知\n发送者: " + senderEscaped + "\n内容: " + messageEscaped + "\n时间: " + timestampEscaped;
+      String text = notifyTextEscaped;
       reqBody = "{";
       reqBody += "\"chat_id\":\"" + channel.key1 + "\",";
       reqBody += "\"text\":\"" + text + "\"";
@@ -410,7 +518,8 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
 }
 
 // 发送短信到所有启用的推送通道
-void sendSMSToServer(const char* sender, const char* message, const char* timestamp) {
+void sendSMSToServer(const char* sender, const char* message, const char* timestamp,
+                     const char* senderName, const char* verifyCode) {
   if (WiFi.status() != WL_CONNECTED) {
     logCaptureLn(String("WiFi未连接，跳过推送"));
     return;
@@ -432,7 +541,7 @@ void sendSMSToServer(const char* sender, const char* message, const char* timest
   logCaptureLn(String("\n=== 开始多通道推送 ==="));
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     if (isPushChannelValid(config.pushChannels[i])) {
-      sendToChannel(config.pushChannels[i], sender, message, timestamp);
+      sendToChannel(config.pushChannels[i], sender, message, timestamp, senderName, verifyCode);
       delay(100); // 短暂延迟避免请求过快
     }
   }

@@ -289,11 +289,25 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
     }
   }
 
+  // 解析发送者名称与验证码
+  String senderName, verifyCode;
+  parseSmsMeta(text, senderName, verifyCode);
+
   // 发送通知http（推送到所有启用的通道）
-  sendSMSToServer(sender, text, timestamp);
-  // 发送通知邮件
-  String subject = ""; subject+="短信";subject+=sender;subject+=",";subject+=text;
-  String body = ""; body+="来自：";body+=sender;body+="，时间：";body+=timestamp;body+="，内容：";body+=text;
+  sendSMSToServer(sender, text, timestamp, senderName.c_str(), verifyCode.c_str());
+  // 发送通知邮件（标题/正文带入发送者名称与验证码，参考 send_notification.sh）
+  String subject;
+  if (verifyCode.length() > 0) {
+    subject = "验证码: " + verifyCode + " 来自 " + (senderName.length() > 0 ? senderName : String(sender));
+  } else if (senderName.length() > 0) {
+    subject = "来自 " + senderName + " 的短信";
+  } else {
+    subject = "来自 " + String(sender) + " 的短信";
+  }
+  String body = "来自：" + String(sender);
+  if (senderName.length() > 0) body += " (" + senderName + ")";
+  body += "，时间：" + String(timestamp) + "，内容：" + String(text);
+  if (verifyCode.length() > 0) body += "，验证码：" + verifyCode;
   sendEmailNotification(subject.c_str(), body.c_str());
 }
 

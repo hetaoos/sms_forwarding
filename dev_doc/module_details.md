@@ -247,34 +247,61 @@ ESP32                         模组
 ### 推送通道执行流程
 
 ```
-sendSMSToServer(sender, message, timestamp)
-  │
+sendSMSToServer(sender, message, timestamp, senderName, verifyCode)
+  │  ← senderName/verifyCode 由 processSmsContent() 调用 parseSmsMeta(text) 解析而来
   ├─ 检查 WiFi 连接
   ├─ 检查是否有启用的有效通道
   │
   └─ for each valid channel:
-       └─ sendToChannel(channel, sender, message, timestamp)
+       └─ sendToChannel(channel, sender, message, timestamp, senderName, verifyCode)
             │
-            ├─ jsonEscape() 转义 sender/message/timestamp
+            ├─ jsonEscape() 转义 sender/message/timestamp/senderName/verifyCode
+            ├─ 构建统一富文本 notifyText 与统一标题 titleText（验证码优先入标题）
             │
             └─ switch(channel.type):
-                 ├─ POST_JSON  → POST {sender, message, timestamp}
-                 ├─ BARK       → POST {title, body}
-                 ├─ GET        → GET ?sender=&message=&timestamp=
-                 ├─ DINGTALK   → POST {msgtype:"text", text:{content:"..."}}
+                 ├─ POST_JSON  → POST {sender, message, timestamp, sender_name, verify_code}
+                 ├─ BARK       → POST {title, body(含发件人/验证码)}
+                 ├─ GET        → GET ?sender=&message=&timestamp=&sender_name=&verify_code=
+                 ├─ DINGTALK   → POST {msgtype:"text", text:{content: notifyText}}
                  │               ├─ 有secret → dingtalkSign() 追加URL参数
-                 ├─ PUSHPLUS   → POST {token, title, content, channel}
+                 ├─ PUSHPLUS   → POST {token, title: titleText, content(含发件人/验证码), channel}
                  │               └─ 默认URL: http://www.pushplus.plus/send
-                 ├─ SERVERCHAN → POST title=&desp= (form-urlencoded)
+                 ├─ SERVERCHAN → POST title=titleText&desp=(含发件人/验证码) (form-urlencoded)
                  │               └─ 默认URL: https://sctapi.ftqq.com/{key1}.send
-                 ├─ CUSTOM     → POST (使用 customBody 模板替换)
-                 ├─ FEISHU     → POST {timestamp?, sign?, msg_type, content}
+                 ├─ CUSTOM     → POST (customBody 模板替换，支持 5 个占位符)
+                 ├─ FEISHU     → POST {timestamp?, sign?, msg_type, content: notifyText}
                  │               └─ 有secret → HMAC-SHA256签名
-                 ├─ GOTIFY     → POST {title, message, priority}
+                 ├─ GOTIFY     → POST {title: titleText, message(含发件人/验证码), priority}
                  │               └─ URL: {url}/message?token={key1}
-                 └─ TELEGRAM   → POST {chat_id, text}
+                 └─ TELEGRAM   → POST {chat_id, text: notifyText}
                      └─ 默认URL: https://api.telegram.org/bot{key2}/sendMessage
 ```
+
+### 短信元信息解析（parseSmsMeta）
+
+在 `processSmsContent()` 中，收到短信正文后会调用 `parseSmsMeta(const String& message, String& senderName, String& verifyCode)` 自动提取两项元信息：
+
+- **发送者名称 `senderName`**：扫描正文中全部 `【...】` / `[[...]]` / `[...]` 片段，**优先选取最靠近开头或结尾（即离任一边缘最近）的括号内容**；结果为括号之间的纯文本，不包含任何括号字符（`【】`、`[]`、`[[]]` 均被丢弃）；无则空串。
+  - 当开头与结尾各有括号时，按"到最近边缘的距离"比较，距离相同则取更靠近开头的。
+  - 注意 `【`/`】` 为 3 字节 UTF-8，匹配按字节索引跳过整个字符，不会残留半个括号字节。
+- **验证码 `verifyCode`**：取正文中首个长度 4~6 的连续数字串（等价于"前后不为其他数字"）；无则空串。
+
+两者解析结果会随 `sendSMSToServer` / `sendToChannel` 一起传入所有通道，并用于增强通知标题与正文（参考 `dev_doc/send_notification.sh` 的标题逻辑：验证码优先进入标题）。
+
+### 通知占位符
+
+除内置通道已自动使用外，自定义模板（`PUSH_TYPE_CUSTOM` 的 `customBody`）支持以下占位符替换：
+
+| 占位符 | 含义 | 来源 |
+|---|---|---|
+| `{sender}` | 短信发送者号码 | `sender` |
+| `{message}` | 短信原始内容 | `message` |
+| `{timestamp}` | 接收时间 | `timestamp` |
+| `{sender_name}` | 解析出的发送者名称（如【阿里云】） | `parseSmsMeta()` |
+| `{verify_code}` | 解析出的短信验证码（4~6 位数字） | `parseSmsMeta()` |
+| `{sender_display}` | 优化后的发送者名称：有 `sender_name` 时取其值，否则回退到 `sender` | `parseSmsMeta()` + 回退 |
+
+> 替换发生在 JSON 转义之后，模板中写入的即为已转义内容；无对应值时替换为空串。
 
 ### HMAC 签名实现
 
