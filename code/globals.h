@@ -22,7 +22,11 @@
 #define LED_BUILTIN 8
 #endif
 
-#define SERIAL_BUFFER_SIZE 500
+#define SERIAL_BUFFER_SIZE 1024      // 串口单行缓冲（必须大于一条 +CMT URC 的长度）
+// 模组串口接收环形缓冲。一条中文长短信分段的 +CMT URC 约 330~350 字节，
+// 分段会连续下发，缓冲太小会在主循环被邮件/推送阻塞期间溢出丢字节（表现为「缺失分段」）。
+// 注意：必须在 Serial1.begin() 之前调用 setRxBufferSize()，否则设置无效（回落到默认 256 字节）。
+#define MODEM_RX_BUFFER_SIZE 16384
 #define MAX_PDU_LENGTH 300
 
 // 全局变量声明

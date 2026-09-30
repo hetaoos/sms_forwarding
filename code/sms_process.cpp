@@ -10,6 +10,8 @@ void initConcatBuffer() {
   for (int i = 0; i < MAX_CONCAT_MESSAGES; i++) {
     concatBuffer[i].inUse = false;
     concatBuffer[i].receivedParts = 0;
+    concatBuffer[i].firstPartTime = 0;
+    concatBuffer[i].lastPartTime = 0;
     for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
       concatBuffer[i].parts[j].valid = false;
       concatBuffer[i].parts[j].text = "";
@@ -37,6 +39,7 @@ int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
       concatBuffer[i].totalParts = totalParts;
       concatBuffer[i].receivedParts = 0;
       concatBuffer[i].firstPartTime = millis();
+      concatBuffer[i].lastPartTime = millis();
       for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
         concatBuffer[i].parts[j].valid = false;
         concatBuffer[i].parts[j].text = "";
@@ -63,6 +66,7 @@ int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
   concatBuffer[oldestSlot].totalParts = totalParts;
   concatBuffer[oldestSlot].receivedParts = 0;
   concatBuffer[oldestSlot].firstPartTime = millis();
+  concatBuffer[oldestSlot].lastPartTime = millis();
   for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
     concatBuffer[oldestSlot].parts[j].valid = false;
     concatBuffer[oldestSlot].parts[j].text = "";
@@ -73,12 +77,22 @@ int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
 // 合并长短信各分段
 String assembleConcatSms(int slot) {
   String result = "";
-  for (int i = 0; i < concatBuffer[slot].totalParts; i++) {
+  String missing = "";
+  // 分段数超过缓存上限时只合并能装下的部分，避免越界读取
+  int total = concatBuffer[slot].totalParts;
+  if (total > MAX_CONCAT_PARTS) total = MAX_CONCAT_PARTS;
+  for (int i = 0; i < total; i++) {
     if (concatBuffer[slot].parts[i].valid) {
       result += concatBuffer[slot].parts[i].text;
     } else {
       result += "[缺失分段" + String(i + 1) + "]";
+      if (missing.length() > 0) missing += ",";
+      missing += String(i + 1);
     }
+  }
+  if (missing.length() > 0) {
+    logCaptureF("⚠️ 长短信缺少分段: %s（参考号 %d，共 %d 段）\n",
+                missing.c_str(), concatBuffer[slot].refNumber, concatBuffer[slot].totalParts);
   }
   return result;
 }
@@ -87,6 +101,7 @@ String assembleConcatSms(int slot) {
 void clearConcatSlot(int slot) {
   concatBuffer[slot].inUse = false;
   concatBuffer[slot].receivedParts = 0;
+  concatBuffer[slot].lastPartTime = 0;
   concatBuffer[slot].sender = "";
   concatBuffer[slot].timestamp = "";
   for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
@@ -100,7 +115,10 @@ void checkConcatTimeout() {
   unsigned long now = millis();
   for (int i = 0; i < MAX_CONCAT_MESSAGES; i++) {
     if (concatBuffer[i].inUse) {
-      if (now - concatBuffer[i].firstPartTime >= CONCAT_TIMEOUT_MS) {
+      // 空闲超时（分段迟迟不来）或总超时（分段慢慢续到，防止槽位被长期占用）
+      bool idleTimeout = (now - concatBuffer[i].lastPartTime >= CONCAT_TIMEOUT_MS);
+      bool hardTimeout = (now - concatBuffer[i].firstPartTime >= CONCAT_MAX_WAIT_MS);
+      if (idleTimeout || hardTimeout) {
         logCaptureLn(String("⏰ 长短信超时，强制转发不完整消息"));
         logCaptureF("  参考号: %d, 已收到: %d/%d\n", 
                       concatBuffer[i].refNumber,
@@ -344,29 +362,28 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   sendEmailNotification(subject.c_str(), body.c_str(), html.c_str());
 }
 
-// 处理URC和PDU
-void checkSerial1URC() {
-  static enum { IDLE,
-                WAIT_PDU } state = IDLE;
+// URC 接收状态机（跨调用保持）
+static enum { IDLE,
+              WAIT_PDU } urcState = IDLE;
 
-  String line = readSerialLine(Serial1);
-  if (line.length() == 0) return;
-
+// 处理从模组收到的一行
+static void handleModemLine(const String& line) {
   // 打印到调试串口
   logCaptureLn(String("Debug> " + line));
 
-  if (state == IDLE) {
+  if (urcState == IDLE) {
     // 检测到短信上报URC头
     if (line.startsWith("+CMT:")) {
       logCaptureLn(String("检测到+CMT，等待PDU数据..."));
-      state = WAIT_PDU;
+      urcState = WAIT_PDU;
     }
-  } else if (state == WAIT_PDU) {
-    // 跳过空行
-    if (line.length() == 0) {
+  } else if (urcState == WAIT_PDU) {
+    // 又来一个新的 +CMT，说明上一条的 PDU 没收到（串口丢数据），继续等下一条
+    if (line.startsWith("+CMT:")) {
+      logCaptureLn(String("⚠️ 上一条 +CMT 的 PDU 未收到，继续等待下一条"));
       return;
     }
-    
+
     // 如果是十六进制字符串，认为是PDU数据
     if (isHexString(line)) {
       logCaptureLn(String("收到PDU数据: " + line));
@@ -395,46 +412,55 @@ void checkSerial1URC() {
         if (totalParts > 1 && partNumber > 0) {
           // 这是长短信的一部分
           logCaptureF("📧 收到长短信分段 %d/%d\n", partNumber, totalParts);
-          
-          // 查找或创建缓存槽位
-          int slot = findOrCreateConcatSlot(refNumber, pdu.getSender(), totalParts);
-          
-          // 存储该分段（partNumber从1开始，数组从0开始）
-          int partIndex = partNumber - 1;
-          if (partIndex >= 0 && partIndex < MAX_CONCAT_PARTS) {
-            if (!concatBuffer[slot].parts[partIndex].valid) {
-              concatBuffer[slot].parts[partIndex].valid = true;
-              concatBuffer[slot].parts[partIndex].text = String(pdu.getText());
-              concatBuffer[slot].receivedParts++;
-              
-              // 如果是第一个收到的分段，保存时间戳
-              if (concatBuffer[slot].receivedParts == 1) {
-                concatBuffer[slot].timestamp = String(pdu.getTimeStamp());
+
+          // 分段号/总段数异常（PDU 损坏时会出现）时不要污染缓存，按普通短信处理
+          if (partNumber > totalParts || totalParts > MAX_CONCAT_PARTS || partNumber > MAX_CONCAT_PARTS) {
+            logCaptureF("⚠️ 分段号异常(%d/%d，上限%d)，按普通短信处理\n",
+                        partNumber, totalParts, MAX_CONCAT_PARTS);
+            processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
+          } else {
+            // 查找或创建缓存槽位
+            int slot = findOrCreateConcatSlot(refNumber, pdu.getSender(), totalParts);
+
+            // 存储该分段（partNumber从1开始，数组从0开始）
+            int partIndex = partNumber - 1;
+            if (partIndex >= 0 && partIndex < MAX_CONCAT_PARTS) {
+              if (!concatBuffer[slot].parts[partIndex].valid) {
+                concatBuffer[slot].parts[partIndex].valid = true;
+                concatBuffer[slot].parts[partIndex].text = String(pdu.getText());
+                concatBuffer[slot].receivedParts++;
+                // 收到新分段就刷新空闲计时，避免后到的分段还没到就被超时转发
+                concatBuffer[slot].lastPartTime = millis();
+
+                // 如果是第一个收到的分段，保存时间戳
+                if (concatBuffer[slot].receivedParts == 1) {
+                  concatBuffer[slot].timestamp = String(pdu.getTimeStamp());
+                }
+
+                logCaptureF("  已缓存分段 %d，当前已收到 %d/%d\n",
+                             partNumber,
+                             concatBuffer[slot].receivedParts,
+                             totalParts);
+              } else {
+                logCaptureF("  ⚠️ 分段 %d 已存在，跳过\n", partNumber);
               }
-              
-              logCaptureF("  已缓存分段 %d，当前已收到 %d/%d\n", 
-                           partNumber, 
-                           concatBuffer[slot].receivedParts, 
-                           totalParts);
-            } else {
-              logCaptureF("  ⚠️ 分段 %d 已存在，跳过\n", partNumber);
             }
-          }
-          
-          // 检查是否已收齐所有分段
-          if (concatBuffer[slot].receivedParts >= totalParts) {
-            logCaptureLn(String("✅ 长短信已收齐，开始合并转发"));
-            
-            // 合并所有分段
-            String fullText = assembleConcatSms(slot);
-            
-            // 处理完整短信
-            processSmsContent(concatBuffer[slot].sender.c_str(), 
-                             fullText.c_str(), 
-                             concatBuffer[slot].timestamp.c_str());
-            
-            // 清空槽位
-            clearConcatSlot(slot);
+
+            // 检查是否已收齐所有分段
+            if (concatBuffer[slot].receivedParts >= totalParts) {
+              logCaptureLn(String("✅ 长短信已收齐，开始合并转发"));
+
+              // 合并所有分段
+              String fullText = assembleConcatSms(slot);
+
+              // 处理完整短信
+              processSmsContent(concatBuffer[slot].sender.c_str(),
+                               fullText.c_str(),
+                               concatBuffer[slot].timestamp.c_str());
+
+              // 清空槽位
+              clearConcatSlot(slot);
+            }
           }
         } else {
           // 普通短信，直接处理
@@ -443,12 +469,24 @@ void checkSerial1URC() {
       }
       
       // 返回IDLE状态
-      state = IDLE;
+      urcState = IDLE;
     } 
     // 如果是其他内容（OK、ERROR等），也返回IDLE
     else {
       logCaptureLn(String("收到非PDU数据，返回IDLE状态"));
-      state = IDLE;
+      urcState = IDLE;
     }
+  }
+}
+
+// 处理URC和PDU
+void checkSerial1URC() {
+  // 一次主循环里把模组串口中积压的行全部读完。
+  // 原来每次只读一行，多条 +CMT 连续下发时后续的会一直堆在串口缓冲区里，
+  // 缓冲区溢出后整段 PDU 被丢弃，长短信就出现「缺失分段」。
+  while (true) {
+    String line = readSerialLine(Serial1);
+    if (line.length() == 0) return;
+    handleModemLine(line);
   }
 }

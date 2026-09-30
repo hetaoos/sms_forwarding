@@ -77,7 +77,8 @@ struct SignalInfo {
 
 // 长短信合并相关定义
 #define MAX_CONCAT_PARTS 10       // 最大支持的长短信分段数
-#define CONCAT_TIMEOUT_MS 30000   // 长短信等待超时时间(毫秒)
+#define CONCAT_TIMEOUT_MS 30000   // 长短信空闲超时: 距上一个分段的间隔超过该值就强制转发(毫秒)
+#define CONCAT_MAX_WAIT_MS 180000 // 长短信总超时: 距第一个分段的上限，防止分段迟迟不来时一直占用槽位
 #define MAX_CONCAT_MESSAGES 5     // 最多同时缓存的长短信组数
 
 // 长短信分段结构
@@ -95,6 +96,7 @@ struct ConcatSms {
   int totalParts;                       // 总分段数
   int receivedParts;                    // 已收到的分段数
   unsigned long firstPartTime;          // 收到第一个分段的时间
+  unsigned long lastPartTime;           // 最近一次收到分段的时间（用于空闲超时判定）
   SmsPart parts[MAX_CONCAT_PARTS];      // 各分段内容
 };
 

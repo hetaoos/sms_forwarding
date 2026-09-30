@@ -17,8 +17,9 @@ void setup() {
   Serial.begin(115200);
   // 缩短初始化延时，WiFi连接会处理自己的超时
   delay(200);
+  // 必须在 begin() 之前设置，否则无效（默认只有 256 字节，长短信分段会被挤掉）
+  Serial1.setRxBufferSize(MODEM_RX_BUFFER_SIZE);
   Serial1.begin(115200, SERIAL_8N1, RXD, TXD);
-  Serial1.setRxBufferSize(SERIAL_BUFFER_SIZE);
   while (Serial1.available()) Serial1.read();
   modemPowerCycle();
   while (Serial1.available()) Serial1.read();

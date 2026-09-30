@@ -121,8 +121,11 @@ checkSerial1URC();             // 5. 检查模组URC(短信上报)
 |---|---|---|
 | `MAX_PUSH_CHANNELS` | 5 | 推送通道数量上限 |
 | `MAX_CONCAT_PARTS` | 10 | 长短信最大分段数 |
-| `CONCAT_TIMEOUT_MS` | 30000 | 长短信等待超时(ms) |
+| `CONCAT_TIMEOUT_MS` | 30000 | 长短信空闲超时：距上一个分段超过该值即强制转发(ms) |
+| `CONCAT_MAX_WAIT_MS` | 180000 | 长短信总超时：距第一个分段的上限(ms) |
 | `MAX_CONCAT_MESSAGES` | 5 | 同时缓存的长短信组数 |
+| `MODEM_RX_BUFFER_SIZE` | 16384 | 模组串口接收环形缓冲（必须在 `Serial1.begin()` 之前设置） |
+| `SERIAL_BUFFER_SIZE` | 1024 | 串口单行缓冲（需大于一条 +CMT URC 的长度） |
 | `DEFAULT_WEB_USER` | `"admin"` | 默认 Web 账号 |
 | `DEFAULT_WEB_PASS` | `"admin123"` | 默认 Web 密码 |
 
