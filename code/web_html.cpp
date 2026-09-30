@@ -189,13 +189,14 @@ const char* htmlPage = R"rawliteral(
 <body>
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <h2>SMS FWD</h2>
+      <h2>SMS Forwarding</h2>
       <span>短信转发器</span>
     </div>
     <nav class="sidebar-nav">
       <div class="sidebar-section-label">配置</div>
       <a data-panel="overview" class="active"><span class="ico">🏠</span> <span>系统概览</span></a>
       <a data-panel="account"><span class="ico">🔐</span> <span>账号管理</span></a>
+      <a data-panel="wifi"><span class="ico">📶</span> <span>WiFi 设置</span></a>
       <a data-panel="email"><span class="ico">📧</span> <span>邮件通知</span></a>
       <a data-panel="push"><span class="ico">🔗</span> <span>推送通道</span></a>
       <a data-panel="admin"><span class="ico">👤</span> <span>管理员 &amp; 黑名单</span></a>
@@ -268,6 +269,41 @@ const char* htmlPage = R"rawliteral(
       </div>
       <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>
       </form>
+    </div>
+
+    <!-- ===== WiFi Settings ===== -->
+    <div class="panel" id="panel-wifi">
+      <h1 class="page-title">WiFi 设置</h1>
+      <p class="page-subtitle">配置设备要连接的 WiFi 网络（连接失败时会自动进入配置 AP 模式）</p>
+      <div class="card">
+        <div class="card-header">📶 当前状态</div>
+        <div class="card-body">
+          <table class="info-table">
+            <tr><td>连接模式</td><td>%WIFI_MODE%</td></tr>
+            <tr><td>当前 SSID</td><td>%WIFI_SSID%</td></tr>
+            <tr><td>设备地址</td><td id="ovIp2">%IP%</td></tr>
+          </table>
+          <div class="form-warning" style="display:%AP_WARN_DISPLAY%;">当前处于配置 AP 模式：请用手机/电脑连接热点 <b>%AP_SSID%</b>（密码 <b>%AP_PASS%</b>），再访问设备地址配置 WiFi。</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">🔑 连接 WiFi</div>
+        <div class="card-body">
+          <div class="form-group"><label class="form-label">WiFi 名称 (SSID)</label><input class="form-input" type="text" id="wifiSsid" value="%WIFI_SSID%" placeholder="WiFi 名称"></div>
+          <div class="form-group"><label class="form-label">WiFi 密码</label><input class="form-input" type="password" id="wifiPass" value="" placeholder="留空表示开放网络"></div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="scanWifi()">扫描附近网络</button>
+            <button class="btn btn-primary" onclick="saveWifi()">保存并连接</button>
+          </div>
+          <div class="result-box" id="wifiSaveResult"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">📡 可用网络</div>
+        <div class="card-body">
+          <div id="wifiScanList"><p class="form-hint">点击「扫描附近网络」查看可连接的 WiFi，选择一个即可自动填入名称。</p></div>
+        </div>
+      </div>
     </div>
 
     <!-- ===== Email ===== -->
@@ -583,6 +619,52 @@ const char* htmlPage = R"rawliteral(
         r.className=d.success?'result-box result-success':'result-box result-error';
         r.textContent=d.message;
       }).catch(function(e){r.className='result-box result-error';r.textContent='请求失败: '+e;});
+    }
+
+    // ---- WiFi 扫描与连接 ----
+    function escapeHtml(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+    function scanWifi(){
+      var r=document.getElementById('wifiScanList');
+      r.innerHTML='<p class="form-hint">扫描中...</p>';
+      fetch('/wifi?action=scan').then(function(rr){return rr.json()}).then(function(d){
+        if(!d.success){r.innerHTML='<p class="form-hint">扫描失败</p>';return;}
+        if(d.count===0){r.innerHTML='<p class="form-hint">未发现任何网络，请确认设备附近有 WiFi 信号</p>';return;}
+        var html='<table class="info-table">';
+        for(var i=0;i<d.networks.length;i++){
+          var n=d.networks[i];
+          var lock=n.enc!==0?'🔒':'🔓';
+          var sig=n.rssi>=-50?'极强':n.rssi>=-60?'很好':n.rssi>=-70?'良好':n.rssi>=-80?'一般':'较弱';
+          var ssid=n.ssid; if(!ssid)ssid='(隐藏网络)';
+          html+='<tr style="cursor:pointer" onclick="pickWifi(\''+escapeJsAttr(ssid)+'\')"><td>'+lock+' '+escapeHtml(ssid)+'</td><td>信道 '+n.chan+'</td><td>'+n.rssi+' dBm ('+sig+')</td></tr>';
+        }
+        html+='</table>';
+        r.innerHTML=html;
+      }).catch(function(e){r.innerHTML='<p class="form-hint">请求失败: '+e+'</p>';});
+    }
+    function escapeJsAttr(s){return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"');}
+    function pickWifi(ssid){
+      document.getElementById('wifiSsid').value=ssid;
+      document.getElementById('wifiPass').focus();
+      window.scrollTo({top:0,behavior:'smooth'});
+    }
+    function saveWifi(){
+      var ssid=document.getElementById('wifiSsid').value.trim();
+      var pass=document.getElementById('wifiPass').value;
+      var r=document.getElementById('wifiSaveResult');
+      if(!ssid){r.className='result-box result-error';r.textContent='请输入 WiFi 名称 (SSID)';return;}
+      r.className='result-box result-loading';r.textContent='正在保存并连接 '+ssid+' ...';
+      var fd=new URLSearchParams();
+      fd.append('action','save');
+      fd.append('ssid',ssid);
+      fd.append('pass',pass);
+      fetch('/wifi',{method:'POST',body:fd}).then(function(rr){return rr.json()}).then(function(d){
+        r.className=d.success?'result-box result-success':'result-box result-error';
+        r.textContent=d.message+(d.success?' 若成功，请连接回你的 WiFi 并刷新页面查看新地址':'');
+      }).catch(function(e){
+        // 连接成功会导致 AP 断开、页面失联，属正常现象
+        r.className='result-box result-info';
+        r.textContent='已提交，正在重连 WiFi；若成功请连接回你的 WiFi 并刷新页面查看新地址';
+      });
     }
 
     // ---- Flight Mode ----

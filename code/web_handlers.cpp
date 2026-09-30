@@ -4,6 +4,7 @@
 #include "modem.h"
 #include "push.h"
 #include "wifi_config.h"
+#include "wifi_manager.h"
 
 // ---- 日志环形缓冲区 ----
 String logBuffer[LOG_BUF_SIZE];
@@ -76,8 +77,20 @@ void handleRoot() {
   if (!checkAuth()) return;
   
   String html = String(htmlPage);
-  html.replace("%IP%", WiFi.localIP().toString());
-  html.replace("%WIFI_SSID%", String(WiFi.SSID()));
+  if (apMode) {
+    html.replace("%IP%", WiFi.softAPIP().toString());
+    html.replace("%WIFI_MODE%", "配置 AP 模式");
+    html.replace("%AP_WARN_DISPLAY%", "block");
+    html.replace("%WIFI_SSID%", config.wifiSsid);
+  } else {
+    html.replace("%IP%", WiFi.localIP().toString());
+    html.replace("%WIFI_MODE%", WiFi.isConnected() ? "已连接 WiFi" : "未连接");
+    html.replace("%AP_WARN_DISPLAY%", "none");
+    html.replace("%WIFI_SSID%", String(WiFi.SSID()));
+  }
+  html.replace("%AP_SSID%", String(AP_SSID));
+  // 配置 AP 密码提示：AP_PASS 长度 >= 8 为密码，否则开放网络
+  html.replace("%AP_PASS%", strlen(AP_PASS) >= 8 ? String(AP_PASS) : "(开放网络，无需密码)");
   html.replace("%FREE_HEAP%", String(ESP.getFreeHeap() / 1024) + " KB");
   long uptimeSec = millis() / 1000;
   char uptimeBuf[16];
@@ -839,6 +852,14 @@ void handleSave() {
     config.webPass = newWebPass;
   }
 
+  // WiFi 配置：只在字段存在时更新（通过「WiFi 设置」面板的保存也会走这里）
+  if (server.hasArg("wifiSsid")) {
+    config.wifiSsid = server.arg("wifiSsid");
+  }
+  if (server.hasArg("wifiPass")) {
+    config.wifiPass = server.arg("wifiPass");
+  }
+
   // 邮件通知表单：只在字段存在时更新
   if (server.hasArg("smtpServer")) {
     config.smtpServer = server.arg("smtpServer");
@@ -1044,7 +1065,7 @@ void handleModem() {
   server.send(200, "application/json", json);
 }
 
-// WiFi 重启
+// WiFi 管理：扫描 / 保存并连接 / 重启
 void handleWifi() {
   if (!checkAuth()) return;
 
@@ -1056,30 +1077,58 @@ void handleWifi() {
   busy = true;
 
   String action = server.arg("action");
-  if (action == "restart") {
+  if (action == "scan") {
+    // 扫描附近 WiFi（同步扫描，约 2~4 秒）
+    logCaptureLn(String("网页端请求扫描WiFi..."));
+    int n = WiFi.scanNetworks();
+    logCaptureLn(String("扫描到 ") + String(n) + " 个网络");
+    String json = "{\"success\":true,\"count\":" + String(n) + ",\"networks\":[";
+    for (int i = 0; i < n; i++) {
+      if (i > 0) json += ",";
+      String ssid = WiFi.SSID(i);
+      json += "{\"ssid\":\"" + jsonEscape(ssid) + "\"";
+      json += ",\"rssi\":" + String(WiFi.RSSI(i));
+      json += ",\"enc\":" + String((int)WiFi.encryptionType(i));
+      json += ",\"chan\":" + String(WiFi.channel(i)) + "}";
+    }
+    json += "]}";
+    server.send(200, "application/json", json);
+    busy = false;
+  }
+  else if (action == "save") {
+    // 保存 WiFi 凭据并尝试连接；成功则关闭 AP，失败保持/回退 AP 模式
+    String ssid = server.arg("ssid");
+    String pass = server.arg("pass");
+    if (ssid.length() == 0) {
+      server.send(200, "application/json", "{\"success\":false,\"message\":\"WiFi 名称 (SSID) 不能为空\"}");
+      busy = false;
+      return;
+    }
+    config.wifiSsid = ssid;
+    config.wifiPass = pass;
+    saveConfig();
+    logCaptureLn(String("网页端保存WiFi配置: ") + ssid);
+    // 先响应浏览器（避免在长连接过程中浏览器超时），再做实际连接
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"已保存，正在连接 WiFi: " + jsonEscape(ssid) + "...\"}");
+    delay(300);  // 等待响应真正发出，再断开 AP 接口
+    bool ok = connectWiFiAndSettle(ssid, pass, 20000);
+    if (ok) {
+      logCaptureLn(String("网页端WiFi连接成功"));
+    } else {
+      logCaptureLn(String("网页端WiFi连接失败，已恢复AP模式"));
+    }
+    busy = false;
+  }
+  else if (action == "restart") {
     logCaptureLn(String("网页端请求重启WiFi..."));
     server.send(200, "application/json", "{\"success\":true,\"message\":\"WiFi 正在重启，请等待约 5 秒后刷新页面\"}");
-    WiFi.disconnect(true);
-    delay(500);
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
-    WiFi.setScanMethod(WIFI_FAST_SCAN);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    logCaptureLn(String("正在重新连接WiFi: " + String(WIFI_SSID)));
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-      delay(50);
-      server.handleClient();
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-      logCaptureLn(String("WiFi 重连成功, IP: " + WiFi.localIP().toString()));
-    } else {
-      logCaptureLn(String("WiFi 重连失败，将在后台持续尝试"));
-    }
+    delay(300);
+    connectWiFiAndSettle(config.wifiSsid, config.wifiPass, 15000);
+    busy = false;
   } else {
     server.send(200, "application/json", "{\"success\":false,\"message\":\"未知操作\"}");
+    busy = false;
   }
-  busy = false;
 }
 
 // 系统控制命令

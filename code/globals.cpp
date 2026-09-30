@@ -9,6 +9,7 @@ WebServer server(80);
 bool configValid = false;
 bool timeSynced = false;
 bool modemReady = false;
+bool apMode = false;
 String modemManufacturer = "未知";
 String modemModel = "未知";
 String modemVersion = "未知";

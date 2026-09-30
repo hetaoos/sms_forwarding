@@ -1,5 +1,6 @@
 #include "config.h"
 #include "web_handlers.h"
+#include "wifi_config.h"
 
 // 保存配置到NVS
 void saveConfig() {
@@ -13,6 +14,8 @@ void saveConfig() {
   preferences.putString("webUser", config.webUser);
   preferences.putString("webPass", config.webPass);
   preferences.putString("numBlkList", config.numberBlackList);
+  preferences.putString("wifiSsid", config.wifiSsid);
+  preferences.putString("wifiPass", config.wifiPass);
   
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -42,6 +45,8 @@ void loadConfig() {
   config.webUser = preferences.getString("webUser", DEFAULT_WEB_USER);
   config.webPass = preferences.getString("webPass", DEFAULT_WEB_PASS);
   config.numberBlackList = preferences.getString("numBlkList", "");
+  config.wifiSsid = preferences.getString("wifiSsid", DEFAULT_WIFI_SSID);
+  config.wifiPass = preferences.getString("wifiPass", DEFAULT_WIFI_PASS);
   
   // 加载推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -111,7 +116,10 @@ bool isConfigValid() {
   return emailValid || pushValid;
 }
 
-// 获取当前设备URL
+// 获取当前设备URL（AP 模式下返回配置热点地址，否则返回 STA 地址）
 String getDeviceUrl() {
+  if (apMode && WiFi.softAPIP() != IPAddress(0, 0, 0, 0)) {
+    return "http://" + WiFi.softAPIP().toString() + "/";
+  }
   return "http://" + WiFi.localIP().toString() + "/";
 }

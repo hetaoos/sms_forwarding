@@ -35,6 +35,7 @@ extern WebServer server;
 extern bool configValid;
 extern bool timeSynced;
 extern bool modemReady;
+extern bool apMode;        // true=当前运行在配置 AP 模式（WiFi 连接失败/未配置）
 extern String modemManufacturer;  // 模组厂商（ATI 解析）
 extern String modemModel;         // 模组型号（ATI 解析）
 extern String modemVersion;       // 模组固件版本（ATI 解析）

@@ -44,6 +44,8 @@ struct Config {
   String webUser;      // Web管理账号
   String webPass;      // Web管理密码
   String numberBlackList;  // 号码黑名单（换行符分隔）
+  String wifiSsid;     // 要连接的 WiFi 名称（持久化到 NVS，启动失败则进 AP 模式）
+  String wifiPass;     // 要连接的 WiFi 密码
 };
 
 // 默认Web管理账号密码

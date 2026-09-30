@@ -9,6 +9,7 @@
 #include "web_handlers.h"
 #include "sms_process.h"
 #include "web_handlers.h"
+#include "wifi_manager.h"
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -26,6 +27,8 @@ void setup() {
   configValid = isConfigValid();
 
   // ---- WiFi 连接优化 ----
+  // 已通过 NVS 加载配置，使用配置中的 WiFi 凭据（缺省为 DEFAULT_WIFI_*）
+  // 连接失败时进入 AP 配置模式，供用户连入 Web 重新设置 WiFi。
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);                    // 关闭 Modem Sleep，提高连接响应速度
   WiFi.setAutoReconnect(true);             // 断线后自动重连
@@ -33,13 +36,18 @@ void setup() {
   // 首次连接成功后 ESP32 会自动记住信道，下次启动更快
   WiFi.setScanMethod(WIFI_FAST_SCAN);
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  logCaptureLn(String("连接wifi: ") + String(WIFI_SSID));
 
-  // 带超时的等待连接，失败则重启重试
+  if (config.wifiSsid.length() > 0) {
+    WiFi.begin(config.wifiSsid.c_str(), config.wifiPass.c_str());
+    logCaptureLn(String("连接wifi: ") + config.wifiSsid);
+  } else {
+    logCaptureLn(String("⚠️ 未配置WiFi，直接进入AP配置模式"));
+  }
+
+  // 带超时的等待连接，失败则进入 AP 模式让用户配置
   unsigned long wifiStart = millis();
   const unsigned long WIFI_TIMEOUT = 20000; // 20秒超时
-  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_TIMEOUT) {
+  while (config.wifiSsid.length() > 0 && WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_TIMEOUT) {
     blink_short(200);
   }
 
@@ -50,9 +58,8 @@ void setup() {
     logCapture(String("信号强度(RSSI): "));
     logCaptureLn(String(WiFi.RSSI()) + " dBm");
   } else {
-    logCaptureLn(String("⚠️ WiFi连接超时，即将重启重试..."));
-    delay(1000);
-    ESP.restart();
+    logCaptureLn(String("⚠️ WiFi连接失败/未配置，启动配置AP模式"));
+    startAPMode();
   }
 
   server.on("/", handleRoot);
