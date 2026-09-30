@@ -47,7 +47,7 @@ void sendEmailNotification(const char* subject, const char* body) {
     }
 
     SMTPMessage msg;
-    String from = "sms notify <"; from += config.smtpUser; from += ">";
+    String from = "SMS Notification <"; from += config.smtpUser; from += ">";
     msg.headers.add(rfc822_from, from.c_str());
     String to = "your_email <"; to += config.smtpSendTo; to += ">";
     msg.headers.add(rfc822_to, to.c_str());

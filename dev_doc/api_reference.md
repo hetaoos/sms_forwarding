@@ -185,7 +185,7 @@
 3. 构造 `SMTPMessage`，设置 from/to/subject/body/timestamp
 4. `smtp.send(msg)`，返回值 false 则重试
 
-**from 格式**: `"sms notify <user@example.com>"`  
+**from 格式**: `"SMS Notification <user@example.com>"`  
 **to 格式**: `"your_email <receiver@example.com>"`  
 **timestamp**: 使用 `time(nullptr)`（需 NTP 已同步）
 
