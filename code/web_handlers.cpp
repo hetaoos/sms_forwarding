@@ -674,12 +674,14 @@ void handleSendSms() {
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="refresh" content="3;url=/sms">
+  <meta name="theme-color" content="#0f0f0f">
   <title>发送结果</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #f5f5f5; }
+    :root { color-scheme: dark; }
+    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #0f0f0f; color: #ededed; }
     .result { padding: 20px; border-radius: 10px; display: inline-block; }
-    .success { background: #4CAF50; color: white; }
-    .error { background: #f44336; color: white; }
+    .success { background: #10241a; color: #63d68e; box-shadow: 0 0 0 1px #1f4a30; }
+    .error { background: #2a1416; color: #ff7b7f; box-shadow: 0 0 0 1px #4d2226; }
   </style>
 </head>
 <body>
@@ -982,10 +984,12 @@ void handleSave() {
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="refresh" content="3;url=/">
+  <meta name="theme-color" content="#0f0f0f">
   <title>保存成功</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #f5f5f5; }
-    .success { background: #4CAF50; color: white; padding: 20px; border-radius: 10px; display: inline-block; }
+    :root { color-scheme: dark; }
+    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #0f0f0f; color: #ededed; }
+    .success { background: #10241a; color: #63d68e; box-shadow: 0 0 0 1px #1f4a30; padding: 20px; border-radius: 10px; display: inline-block; }
   </style>
 </head>
 <body>

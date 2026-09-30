@@ -6,27 +6,42 @@ const char* htmlPage = R"rawliteral(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f0f0f">
   <title>SMS Forwarding</title>
   <style>
     :root {
-      --ink: #171717;
-      --body: #4d4d4d;
-      --mute: #888888;
-      --canvas: #ffffff;
-      --canvas-soft: #fafafa;
-      --canvas-soft-2: #f5f5f5;
-      --hairline: #ebebeb;
-      --hairline-strong: #a1a1a1;
-      --link: #0070f3;
-      --error: #ee0000;
-      --warning-soft: #ffefcf;
+      color-scheme: dark;
+      --ink: #ededed;
+      --body: #a8a8a8;
+      --mute: #767676;
+      --canvas: #181818;
+      --canvas-soft: #0f0f0f;
+      --canvas-soft-2: #212121;
+      --hairline: #2b2b2b;
+      --hairline-strong: #4d4d4d;
+      --sidebar-bg: #101010;
+      --link: #4c8dff;
+      --error: #e5484d;
+      --accent: #ededed;
+      --accent-fg: #0f0f0f;
+      --warning-soft: #33280f;
+      --warning-text: #e8b545;
       --sidebar-w: 220px;
       --radius-sm: 6px;
       --radius-md: 8px;
       --radius-pill: 100px;
-      --shadow-card: 0 0 0 1px rgba(0,0,0,0.08), 0 1px 1px rgba(0,0,0,0.02), 0 2px 2px rgba(0,0,0,0.04);
+      --shadow-card: 0 0 0 1px rgba(255,255,255,0.07), 0 1px 2px rgba(0,0,0,0.4);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 100px; border: 2px solid var(--canvas); }
+    ::-webkit-scrollbar-thumb:hover { background: #4d4d4d; }
+    input:-webkit-autofill, input:-webkit-autofill:focus, textarea:-webkit-autofill {
+      -webkit-text-fill-color: var(--ink);
+      -webkit-box-shadow: 0 0 0 1000px var(--canvas) inset;
+      caret-color: var(--ink);
+    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       font-size: 14px; font-weight: 400; line-height: 1.5;
@@ -37,7 +52,8 @@ const char* htmlPage = R"rawliteral(
     /* Sidebar */
     .sidebar {
       position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar-w);
-      background: var(--ink); display: flex; flex-direction: column;
+      background: var(--sidebar-bg); border-right: 1px solid var(--hairline);
+      display: flex; flex-direction: column;
       z-index: 100; overflow-y: auto;
     }
     .sidebar-brand { padding: 22px 18px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
@@ -93,7 +109,7 @@ const char* htmlPage = R"rawliteral(
     .form-select { cursor: pointer; }
     .form-textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
     .form-hint { font-size: 11px; color: var(--mute); margin-top: 3px; line-height: 1.4; }
-    .form-warning { font-size: 11px; color: #ab570a; background: var(--warning-soft); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; line-height: 1.5; }
+    .form-warning { font-size: 11px; color: var(--warning-text); background: var(--warning-soft); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; line-height: 1.5; }
     .form-row { display: flex; gap: 14px; }
     .form-row .form-group { flex: 1; }
 
@@ -105,20 +121,20 @@ const char* htmlPage = R"rawliteral(
       transition: all 0.15s; line-height: 1.4; white-space: nowrap;
     }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-primary { background: var(--ink); color: #fff; }
-    .btn-primary:hover { background: #2a2a2a; }
+    .btn-primary { background: var(--accent); color: var(--accent-fg); }
+    .btn-primary:hover { background: #ffffff; }
     .btn-secondary { background: var(--canvas); color: var(--ink); box-shadow: 0 0 0 1px var(--hairline); }
     .btn-secondary:hover { background: var(--canvas-soft-2); }
     .btn-danger { background: var(--error); color: #fff; }
-    .btn-danger:hover { background: #c50000; }
+    .btn-danger:hover { background: #c9252d; }
     .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: var(--radius-sm); }
-    .btn-white { background: #fff; color: var(--ink); }
-    .btn-white:hover { background: #f0f0f0; }
+    .btn-white { background: var(--canvas-soft-2); color: var(--ink); box-shadow: 0 0 0 1px var(--hairline); }
+    .btn-white:hover { background: var(--hairline); }
     .btn-block { width: 100%; justify-content: center; }
     .btn-save { padding: 10px 20px; font-size: 14px; margin-top: 4px; }
 
     /* Push Channel */
-    .push-channel { border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 14px; margin-bottom: 10px; background: var(--canvas-soft); transition: border-color 0.15s; }
+    .push-channel { border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 14px; margin-bottom: 10px; background: var(--canvas-soft-2); transition: border-color 0.15s; }
     .push-channel:hover { border-color: var(--hairline-strong); }
     .push-channel-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
     .push-channel-header label { font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
@@ -138,21 +154,21 @@ const char* htmlPage = R"rawliteral(
     .push-channel-body input:focus, .push-channel-body select:focus, .push-channel-body textarea:focus { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
     .push-channel-body select { cursor: pointer; }
     .push-channel-body textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
-    .push-type-hint { font-size: 11px; color: var(--body); margin-top: 4px; padding: 8px 12px; background: var(--canvas-soft-2); border-radius: var(--radius-sm); font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; line-height: 1.5; }
+    .push-type-hint { font-size: 11px; color: var(--body); margin-top: 4px; padding: 8px 12px; background: #2a2a2a; border-radius: var(--radius-sm); font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; line-height: 1.5; }
 
     /* Result Boxes */
     .result-box { margin-top: 12px; padding: 10px 14px; border-radius: var(--radius-sm); display: none; font-size: 12px; line-height: 1.5; }
-    .result-success { background: #e8f5e9; color: #2e7d32; display: block; }
-    .result-error { background: #ffebee; color: #c62828; display: block; }
-    .result-loading { background: #fff3e0; color: #e65100; display: block; }
-    .result-info { background: #e3f2fd; color: #1565c0; display: block; }
+    .result-success { background: #10241a; color: #63d68e; display: block; }
+    .result-error { background: #2a1416; color: #ff7b7f; display: block; }
+    .result-loading { background: #2a2113; color: #f5c163; display: block; }
+    .result-info { background: #13253a; color: #77b3ff; display: block; }
     .info-table { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 12px; }
     .info-table td { padding: 5px 8px; border-bottom: 1px solid var(--hairline); }
     .info-table td:first-child { font-weight: 500; color: var(--body); width: 40%; }
 
     /* Overview */
     .overview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .overview-item { background: var(--canvas-soft); border-radius: var(--radius-sm); padding: 14px; }
+    .overview-item { background: var(--canvas-soft-2); border-radius: var(--radius-sm); padding: 14px; }
     .overview-item .label { font-size: 10px; color: var(--mute); text-transform: uppercase; letter-spacing: 0.4px; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; margin-bottom: 4px; }
     .overview-item .value { font-size: 14px; font-weight: 600; color: var(--ink); }
 
@@ -161,7 +177,7 @@ const char* htmlPage = R"rawliteral(
     .btn-row .btn { flex: 1; min-width: 90px; }
     .btn-row + .btn-row { margin-top: 8px; }
     #atLog {
-      background: var(--ink); color: #50e3c2; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace;
+      background: #0a0a0a; color: #50e3c2; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace;
       min-height: 130px; max-height: 260px; overflow-y: auto; padding: 12px 14px;
       border-radius: var(--radius-sm); margin-bottom: 10px; font-size: 12px;
       white-space: pre-wrap; word-break: break-all; line-height: 1.5;
@@ -504,7 +520,7 @@ const char* htmlPage = R"rawliteral(
       <div class="card">
         <div class="card-header">📋 日志输出</div>
         <div class="card-body">
-          <div id="logView" style="background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:8px;font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:12px;line-height:1.6;max-height:60vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;min-height:300px;">加载中...</div>
+          <div id="logView" style="background:#101010;color:#c9c9c9;padding:12px;border-radius:8px;font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:12px;line-height:1.6;max-height:60vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;min-height:300px;">加载中...</div>
           <div class="btn-row" style="margin-top:8px;">
             <button class="btn btn-secondary btn-sm" onclick="clearLogUI()">清空显示</button>
             <button class="btn btn-secondary btn-sm" onclick="refreshLog()">手动刷新</button>
