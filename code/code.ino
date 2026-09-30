@@ -123,6 +123,7 @@ void loop() {
   }
   checkConcatTimeout();
   modemAutoRecover();
+  modemTimeSyncTick();   // 模组就绪后用 4G 网络时间校准系统时间，之后每 24 小时再校准一次
   if (Serial.available()) Serial1.write(Serial.read());
   checkSerial1URC();
   // 推送/邮件的实际发送放在这里分片执行（每次最多一次网络请求），

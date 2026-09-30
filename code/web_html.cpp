@@ -247,6 +247,7 @@ const char* htmlPage = R"rawliteral(
             <div class="overview-item"><div class="label">WiFi SSID</div><div class="value" id="ovSsid">%WIFI_SSID%</div></div>
             <div class="overview-item"><div class="label">Free Heap</div><div class="value" id="ovHeap">%FREE_HEAP%</div></div>
             <div class="overview-item"><div class="label">Uptime</div><div class="value" id="ovUptime">%UPTIME%</div></div>
+            <div class="overview-item"><div class="label">系统时间</div><div class="value" id="ovTime" data-epoch="%SYSTIME_EPOCH%" data-offset="%TZ_OFFSET%">%SYSTIME%</div></div>
           </div>
         </div>
       </div>
@@ -445,6 +446,14 @@ const char* htmlPage = R"rawliteral(
           <div class="result-box" id="queryResult"></div>
         </div>
       </div>
+      <div class="card">
+        <div class="card-header">🕐 时间同步</div>
+        <div class="card-body">
+          <button class="btn btn-primary" id="modemTimeBtn" onclick="syncModemTime()">获取模组时间并同步</button>
+          <p class="form-hint">读取 4G 模组的网络时间（AT+CCLK?，由基站下发）并写入系统时间；NTP 不可用时也能校准</p>
+          <div class="result-box" id="modemTimeResult"></div>
+        </div>
+      </div>
     </div>
 
     <!-- ===== Network Test ===== -->
@@ -610,6 +619,34 @@ const char* htmlPage = R"rawliteral(
         else{r.className='result-box result-error';r.innerHTML='查询失败: '+d.message;}
       }).catch(function(e){r.className='result-box result-error';r.textContent='请求失败: '+e;});
     }
+
+    // ---- 模组时间同步 ----
+    function syncModemTime(){
+      var b=document.getElementById('modemTimeBtn'),r=document.getElementById('modemTimeResult');
+      b.disabled=true;
+      r.className='result-box result-loading';r.textContent='正在读取模组时间...';
+      fetch('/modem?action=modemtime').then(function(rr){return rr.json()}).then(function(d){
+        b.disabled=false;
+        if(d.success){r.className='result-box result-success';r.innerHTML=d.message;}
+        else{r.className='result-box result-error';r.innerHTML='同步失败: '+d.message;}
+      }).catch(function(e){b.disabled=false;r.className='result-box result-error';r.textContent='请求失败: '+e;});
+    }
+
+    // ---- 系统时间（每秒自增，无需刷新页面）----
+    (function(){
+      var el=document.getElementById('ovTime');if(!el)return;
+      var ep=parseInt(el.getAttribute('data-epoch')||'0',10);
+      var off=parseInt(el.getAttribute('data-offset')||'0',10);
+      if(!ep)return;
+      function p2(n){return (n<10?'0':'')+n;}
+      setInterval(function(){
+        ep++;
+        var d=new Date((ep+off*3600)*1000);
+        el.textContent=d.getUTCFullYear()+'-'+p2(d.getUTCMonth()+1)+'-'+p2(d.getUTCDate())+
+          ' '+p2(d.getUTCHours())+':'+p2(d.getUTCMinutes())+':'+p2(d.getUTCSeconds())+
+          ' (UTC'+(off>=0?'+':'')+off+')';
+      },1000);
+    })();
 
     // ---- Ping ----
     function confirmPing(){if(confirm('确定要执行 Ping 吗？将消耗少量流量。'))doPing();}

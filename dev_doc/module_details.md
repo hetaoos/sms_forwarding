@@ -34,6 +34,9 @@
    ├── sendATWithRetry("AT+CNMI=2,2,0,0,0", 1000) ×3        // 短信URC上报
    ├── sendATWithRetry("AT+CMGF=0", 1000) ×3                // PDU模式
    └── waitCEREG() ×20                                       // 等网络注册
+   → 判定 modemReady 后 syncTimeFromModem() (AT+CCLK?) 把基站网络时间写入系统时间；
+     失败（NITZ 下发有延迟）时由 loop() 的 modemTimeSyncTick() 每 60 秒重试，最多 10 次；
+     首次成功后 modemTimeSyncTick() 每 24 小时再校准一次（抵消 RTC 漂移）
    → 任一步失败则返回 false，modemReady=false，由 loop() 中的
      modemAutoRecover() 每 90 秒用更少的重试次数(background=true)自动重试
 
@@ -506,6 +509,8 @@ SPA 页面中的 `%PLACEHOLDER%` 在 `handleRoot()` 中通过 `html.replace()` �
 | `%SMTP_SERVER%` ~ `%SMTP_SEND_TO%` | `config.smtp*` |
 | `%ADMIN_PHONE%` | `config.adminPhone` |
 | `%NUMBER_BLACK_LIST%` | `config.numberBlackList` |
+| `%SYSTIME%` | `formatSystemTime(time(nullptr))`（UTC+8 展示），未同步时为「未同步」 |
+| `%SYSTIME_EPOCH%` / `%TZ_OFFSET%` | 系统时间 UTC 时间戳 / 展示时区偏移，供 JS 秒级自增 |
 | `%PUSH_CHANNELS%` | 循环生成 5 个通道的 HTML 表单 |
 
 ### 响应格式

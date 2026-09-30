@@ -2,6 +2,7 @@
 #define CONFIG_TYPES_H
 
 #include <Arduino.h>
+#include <time.h>
 
 // 推送通道类型
 enum PushType {
@@ -93,6 +94,23 @@ struct SignalInfo {
     : valid(false), lte(false), rsrpDbm(0), rsrqDb(0.0f), rssiDbm(0), ber(99),
       quality("未知") {}
 };
+
+// ---- 模组时钟信息 ----
+// 模组注册上 4G 网络后会由基站下发网络时间，用 AT+CCLK? 读出。
+// 系统时间与 NTP 一致，统一以 UTC 时间戳保存；展示时才加 DISPLAY_TZ_OFFSET_HOURS。
+struct ModemTimeInfo {
+  bool valid;          // 是否解析到合法时间（模组时钟未初始化时为 false）
+  time_t epochUtc;     // 换算后的 UTC Unix 时间戳
+  int tzQuarterHours;  // 模组时区偏移（15 分钟为单位，+32 = UTC+8）
+  String localText;    // 模组本地时间文案 "YYYY-MM-DD HH:MM:SS"
+  String raw;          // 模组返回的原始 +CCLK 参数
+  String source;       // 数据来源，如 "AT+CCLK?"
+
+  ModemTimeInfo() : valid(false), epochUtc(0), tzQuarterHours(0) {}
+};
+
+// 展示时区偏移（小时）：系统内部统一保存 UTC 时间戳，展示时加该偏移（默认北京时间 UTC+8）
+#define DISPLAY_TZ_OFFSET_HOURS 8
 
 // ---- 板载蓝色 LED 指示 ----
 // LED 为低电平点亮。启动/初始化完成后保持熄灭，只在收到短信时闪烁。

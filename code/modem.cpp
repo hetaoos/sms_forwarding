@@ -1,5 +1,6 @@
 #include "modem.h"
 #include "web_handlers.h"
+#include <sys/time.h>
 
 // 初始化重试上限（所有等待都必须有上界，避免模组异常时永久卡死/反复重启）
 #define MODEM_AT_RETRY            8      // 开机握手重试次数
@@ -12,6 +13,8 @@
 #define MODEM_REINIT_MAX_INTERVAL_MS 300000UL // 连续失败后的最长重试间隔（5 分钟）
 #define SMS_PROMPT_TIMEOUT_MS     3000UL  // 等待 ">" 提示符的上限
 #define SMS_RESULT_TIMEOUT_MS     12000UL // 等待 +CMGS/OK 的上限
+
+static bool trySyncModemTime();   // 定义在「模组时钟」小节：模组就绪后尝试同步一次网络时间
 
 // 串口占用标记：短信发送/模组初始化期间独占 Serial1。
 // HTTP 处理器据此快速失败，避免嵌套调用把对方的提示符和结果吞掉而双双卡到超时。
@@ -209,7 +212,11 @@ bool modemInit(bool background) {
   }
 
   modemReady = registered && cnmiOk && cmgfOk;
-  if (!modemReady) {
+  if (modemReady) {
+    // 模组就绪后立刻用基站网络时间校准系统时间（NTP 走 WiFi，这条路径无外网时也能校准）。
+    // 基站时间下发可能有延迟，此刻失败则由 loop() 的 modemTimeSyncTick() 定时重试。
+    trySyncModemTime();
+  } else {
     logCaptureLn(String("⚠️ 模组初始化未完成，系统将定时自动重试（不影响网页访问）"));
   }
   modemInitInProgress = false;
@@ -460,6 +467,160 @@ String getModemOwnNumber() {
     }
   }
   return "";
+}
+
+// ---- 模组时钟（AT+CCLK?）----
+// 模组返回示例：+CCLK: "26/09/30,19:36:45+32"
+// 年份两位或四位均可；时区是 15 分钟单位的有符号数（+32 = UTC+8）
+#define MODEM_TIME_MIN_YEAR 2020   // 早于该年份视为模组时钟无效（尚未取到网络时间）
+
+// ML307R 实测：AT+CCLK? 的时分秒是 UTC，末尾的 +zz 只是「网络时区指示」，并没有叠加到时分秒上
+// （例：真实北京时间 2026-10-01 03:36，模组返回 "26/09/30,19:36:45+32"）。
+// 所以这里直接把时分秒当 UTC 时间戳使用，本地时间 = UTC + 时区偏移。
+// 若你的模组返回的是已带偏移的本地时间，把下面改成 0（此时 UTC = 时分秒 - 时区偏移）。
+#define MODEM_CCLK_IS_UTC  1
+
+// 公历日期 → 距 1970-01-01 的天数（自己算，不依赖 libc 的时区设置）
+static long daysFromCivil(int y, int m, int d) {
+  y -= (m <= 2) ? 1 : 0;
+  long era = (y >= 0 ? y : y - 399) / 400;
+  int yoe = (int)(y - era * 400);
+  int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+// 时间戳 → "YYYY-MM-DD HH:MM:SS"（按 offsetHours 偏移后的本地时间）
+static String formatEpoch(time_t epochUtc, int offsetHours) {
+  time_t t = epochUtc + (time_t)offsetHours * 3600;
+  struct tm* tmVal = gmtime(&t);
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+           tmVal->tm_year + 1900, tmVal->tm_mon + 1, tmVal->tm_mday,
+           tmVal->tm_hour, tmVal->tm_min, tmVal->tm_sec);
+  return String(buf);
+}
+
+// 解析 +CCLK 的参数体（已去掉引号），如 26/10/01,20:13:45+32
+static bool parseCclk(const String& body, ModemTimeInfo& info) {
+  int comma = body.indexOf(',');
+  if (comma < 0) return false;
+  String datePart = body.substring(0, comma);
+  String timePart = body.substring(comma + 1);
+  datePart.trim();
+  timePart.trim();
+
+  // 时区：时间串末尾的 +/-NN（15 分钟单位）
+  int tzQuarter = 0;
+  int signPos = -1;
+  for (int i = timePart.length() - 1; i >= 0; i--) {
+    char c = timePart.charAt(i);
+    if (c == '+' || c == '-') { signPos = i; break; }
+  }
+  if (signPos >= 0) {
+    tzQuarter = timePart.substring(signPos).toInt();  // toInt 自带正负号
+    timePart = timePart.substring(0, signPos);
+  }
+
+  int s1 = datePart.indexOf('/');
+  int s2 = datePart.indexOf('/', s1 + 1);
+  int c1 = timePart.indexOf(':');
+  int c2 = timePart.indexOf(':', c1 + 1);
+  if (s1 < 0 || s2 < 0 || c1 < 0 || c2 < 0) return false;
+
+  int year = datePart.substring(0, s1).toInt();
+  int mon  = datePart.substring(s1 + 1, s2).toInt();
+  int day  = datePart.substring(s2 + 1).toInt();
+  int hour = timePart.substring(0, c1).toInt();
+  int min  = timePart.substring(c1 + 1, c2).toInt();
+  int sec  = timePart.substring(c2 + 1).toInt();   // 可能带小数，toInt 只取整数部分
+  if (year < 100) year += 2000;
+  if (year < MODEM_TIME_MIN_YEAR || mon < 1 || mon > 12 || day < 1 || day > 31) return false;
+  if (hour > 23 || min > 59 || sec > 59) return false;
+
+  long days = daysFromCivil(year, mon, day);
+  long secs = days * 86400L + hour * 3600L + min * 60L + sec;
+  // 见 MODEM_CCLK_IS_UTC：默认时分秒即 UTC，不再额外减去时区偏移
+  info.epochUtc = (time_t)(MODEM_CCLK_IS_UTC ? secs : secs - (long)tzQuarter * 900L);
+  info.tzQuarterHours = tzQuarter;
+  info.valid = true;
+  return true;
+}
+
+String formatSystemTime(time_t epochUtc) {
+  if (epochUtc < 100000) return String("未同步");
+  return formatEpoch(epochUtc, DISPLAY_TZ_OFFSET_HOURS) +
+         " (UTC+" + String(DISPLAY_TZ_OFFSET_HOURS) + ")";
+}
+
+// 时间同步策略：
+// 1) 首次：基站网络时间（NITZ）下发有几秒到几十秒的延迟，模组刚就绪时 AT+CCLK? 可能是无效值，
+//    所以就绪后由主循环每 60 秒重试，成功一次即进入定期校准；失败有次数上限，不再刷日志。
+// 2) 之后：ESP32 的 RTC 会漂移，每 24 小时再用基站时间校准一次。
+#define MODEM_TIME_SYNC_INTERVAL_MS   60000UL     // 首次同步未成功时的重试间隔
+#define MODEM_TIME_SYNC_MAX_ATTEMPTS  10          // 首次同步的重试上限
+#define MODEM_TIME_RESYNC_INTERVAL_MS 86400000UL  // 首次成功后的定期校准间隔（24 小时）
+static bool modemTimeSynced = false;
+static int modemTimeAttempts = 0;
+static unsigned long lastModemTimeAttempt = 0;    // 最近一次尝试（成功时即最近一次校准）时刻
+
+// 尝试同步一次；返回是否成功
+static bool trySyncModemTime() {
+  lastModemTimeAttempt = millis();
+  ModemTimeInfo info;
+  if (syncTimeFromModem(info)) return true;
+  if (modemTimeSynced) return false;   // 之前成功过，24 小时后再试，不计入首轮重试次数
+  modemTimeAttempts++;
+  if (modemTimeAttempts >= MODEM_TIME_SYNC_MAX_ATTEMPTS) {
+    logCaptureLn(String("⚠️ 模组时间同步已重试 " + String(modemTimeAttempts) +
+                        " 次仍未取到有效网络时间，停止自动重试（可在「模组诊断」手动同步）"));
+  }
+  return false;
+}
+
+// 主循环调用：模组就绪后同步时间，成功之后每 24 小时再校准一次
+void modemTimeSyncTick() {
+  if (!modemReady) return;
+  unsigned long now = millis();
+  if (modemTimeSynced) {
+    // 已同步成功：定期校准，抵消 RTC 漂移（millis() 回绕也能正确比较）
+    if (now - lastModemTimeAttempt >= MODEM_TIME_RESYNC_INTERVAL_MS) trySyncModemTime();
+    return;
+  }
+  if (modemTimeAttempts >= MODEM_TIME_SYNC_MAX_ATTEMPTS) return;
+  if (now - lastModemTimeAttempt < MODEM_TIME_SYNC_INTERVAL_MS) return;
+  trySyncModemTime();
+}
+
+bool getModemTime(ModemTimeInfo& info) {
+  info = ModemTimeInfo();
+  info.source = "AT+CCLK?";
+  String params = extractParams(sendATCommand("AT+CCLK?", 2000), "+CCLK:");
+  params.replace("\"", "");
+  params.trim();
+  info.raw = params;
+  if (params.length() == 0) return false;
+  if (!parseCclk(params, info)) return false;
+  // 模组本地时间 = UTC 时间戳 + 模组时区偏移
+  info.localText = formatEpoch(info.epochUtc + (time_t)info.tzQuarterHours * 900, 0);
+  return true;
+}
+
+bool syncTimeFromModem(ModemTimeInfo& info) {
+  if (!getModemTime(info)) {
+    logCaptureLn(String("⚠️ 未能获取模组时间（AT+CCLK? 无有效响应或时钟未初始化）"));
+    return false;
+  }
+  struct timeval tv;
+  tv.tv_sec = info.epochUtc;
+  tv.tv_usec = 0;
+  settimeofday(&tv, NULL);
+  timeSynced = true;
+  modemTimeSynced = true;   // 成功一次即停止自动重试（网页手动同步同样走这里）
+  logCaptureLn(String("系统时间已同步（来源: 4G 网络时间 " + info.source + "，原始 " + info.raw +
+                      "，UTC " + formatEpoch(info.epochUtc, 0) +
+                      "）: " + formatSystemTime(info.epochUtc)));
+  return true;
 }
 
 // 取消模组可能残留的 CMGS 输入态：

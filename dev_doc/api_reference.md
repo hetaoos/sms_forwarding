@@ -449,6 +449,8 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 | `%SMTP_SERVER%` ~ `%SMTP_SEND_TO%` | `config.smtp*` |
 | `%ADMIN_PHONE%` | `config.adminPhone` |
 | `%NUMBER_BLACK_LIST%` | `config.numberBlackList` |
+| `%SYSTIME%` | `formatSystemTime(time(nullptr))`（UTC+8 展示），未同步时为「未同步」 |
+| `%SYSTIME_EPOCH%` / `%TZ_OFFSET%` | 系统时间 UTC 时间戳 / 展示时区偏移，供 JS 秒级自增 |
 | `%SMTP_CHECK%` | 邮件配置是否完整 |
 | `%PUSH_COUNT%` | 已启用的有效推送通道数 |
 | `%PUSH_CHANNELS%` | 循环生成 5 个通道的 HTML 表单 |

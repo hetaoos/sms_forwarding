@@ -117,7 +117,7 @@ checkAuth()               [web_handlers.cpp]
     GET  /flight   → handleFlightMode()  AT+CFUN 查询/切换飞行模式
     GET  /at       → handleATCommand()   透传 AT 指令到模组
     GET  /log      → handleLog()         返回环形缓冲区日志 (JSON 数组)
-    GET  /modem    → handleModem()       模组重启/信号/运营商/IMEI
+    GET  /modem    → handleModem()       模组重启/信号/运营商/IMEI/时间同步
     GET  /wifi     → handleWifi()        WiFi 重启
     GET  /system   → handleSystem()      整机重启 (ESP.restart)
 ```

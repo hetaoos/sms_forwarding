@@ -22,5 +22,14 @@ bool modemBusy();
 bool getModemSignal(SignalInfo& info);
 // 获取本机号码（SIM 卡 MSISDN，AT+CNUM），取不到时返回空串
 String getModemOwnNumber();
+// ---- 模组时钟 / 系统时间 ----
+// 读取模组的网络时间（AT+CCLK?），解析为 UTC 时间戳 + 本地时间文案
+bool getModemTime(ModemTimeInfo& info);
+// 读取模组时间并写入系统时间（settimeofday），成功时置 timeSynced=true
+bool syncTimeFromModem(ModemTimeInfo& info);
+// 把 UTC 时间戳格式化为展示用本地时间 "YYYY-MM-DD HH:MM:SS (UTC+8)"；未同步时返回 "未同步"
+String formatSystemTime(time_t epochUtc);
+// 主循环调用：模组已就绪但时间还没同步成功时，定期重试（基站时间下发有延迟）
+void modemTimeSyncTick();
 
 #endif

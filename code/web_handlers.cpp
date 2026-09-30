@@ -180,6 +180,11 @@ void handleRoot() {
   char uptimeBuf[16];
   snprintf(uptimeBuf, sizeof(uptimeBuf), "%ld:%02ld:%02ld", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
   html.replace("%UPTIME%", String(uptimeBuf));
+  // 系统时间：展示用本地时间（UTC+8），同时把 UTC 时间戳交给 JS 做秒级自增
+  time_t sysNow = time(nullptr);
+  html.replace("%SYSTIME%", timeSynced ? formatSystemTime(sysNow) : String("未同步"));
+  html.replace("%SYSTIME_EPOCH%", String(timeSynced ? (unsigned long)sysNow : 0UL));
+  html.replace("%TZ_OFFSET%", String(DISPLAY_TZ_OFFSET_HOURS));
   html.replace("%WEB_USER%", config.webUser);
   html.replace("%WEB_PASS%", config.webPass);
   html.replace("%SMTP_SERVER%", config.smtpServer);
@@ -1102,6 +1107,21 @@ void handleModem() {
       }
     }
     if (!success) message = "无法获取运营商: " + resp;
+  }
+  else if (action == "modemtime") {
+    // 读取 4G 网络时间并写入系统时间（网页「模组诊断」页面的同步按钮）
+    logCaptureLn(String("网页端请求同步模组时间"));
+    ModemTimeInfo info;
+    String before = timeSynced ? formatSystemTime(time(nullptr)) : String("未同步");
+    if (syncTimeFromModem(info)) {
+      success = true;
+      message = "模组时间(本地): " + info.localText + "<br>" +
+                "模组原始值: " + info.raw + "（" + info.source + "，时分秒为 UTC）<br>" +
+                "同步前系统时间: " + before + "<br>" +
+                "已设置为系统时间: " + formatSystemTime(time(nullptr));
+    } else {
+      message = "未取到有效的模组时间（模组无响应或尚未获取网络时间），当前系统时间: " + before;
+    }
   }
   else if (action == "imei") {
     logCaptureLn(String("网页端查询IMEI: AT+GSN"));
