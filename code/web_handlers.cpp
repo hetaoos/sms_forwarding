@@ -943,8 +943,9 @@ void handleSave() {
   if (configValid) {
     logCaptureLn(String("配置有效，发送启动通知..."));
     String subject = "短信转发器配置已更新";
-    String body = "设备配置已更新\n设备地址: " + getDeviceUrl();
-    notifyQueueEmail(subject.c_str(), body.c_str(), MAIL_BODY_TEXT);
+    String inner = buildMailTable(buildMailRow("设备地址", getDeviceUrl()) +
+                                  buildMailRow("IP地址", WiFi.localIP().toString()));
+    notifyQueueEmail(subject.c_str(), buildMailHtml("⚙️ 配置已更新", inner).c_str(), MAIL_BODY_HTML);
   }
 }
 

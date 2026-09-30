@@ -3,15 +3,24 @@
 
 #include "globals.h"
 
-// 邮件正文类型：纯文本或 HTML 富文本
+// 邮件正文类型：纯文本或 HTML 富文本（项目内所有通知邮件统一走 HTML）
 enum MailBodyType {
   MAIL_BODY_TEXT = 0,
   MAIL_BODY_HTML = 1
 };
 
+// ---- HTML 邮件正文构建工具（启动通知/短信转发/命令结果等各类邮件共用同一套卡片风格）----
+// 把标题与卡片主体包成完整 HTML 正文：灰底 + 白色圆角卡片 + 渐变标题栏 + 底部标识
+// title 为标题栏文字（可带 emoji，需自行转义），inner 为卡片主体 HTML 片段，maxWidth 为卡片宽度
+String buildMailHtml(const String& title, const String& inner, int maxWidth = 560);
+// 一行「键: 值」表格行（键值均已转义，可直接拼接）
+String buildMailRow(const String& key, const String& val);
+// 把若干 buildMailRow 结果包成一个带内边距的表格块
+String buildMailTable(const String& rows);
+
 // 发送邮件通知（带重试，同步阻塞）。body 为正文内容，bodyType 指明它是纯文本还是 HTML。
 // 仅用于「必须立刻发出」的场景（如重启前的通知）；短信转发等场景请走下面的异步队列。
-void sendEmailNotification(const char* subject, const char* body, MailBodyType bodyType = MAIL_BODY_TEXT);
+void sendEmailNotification(const char* subject, const char* body, MailBodyType bodyType = MAIL_BODY_HTML);
 
 // 发送"设备已启动"通知邮件（含模组初始化状态/模组信息/信号/号码等，HTML 富文本）
 void sendStartupEmail();
@@ -32,7 +41,7 @@ enum NotifyStep { STEP_OK, STEP_FAILED, STEP_RETRY };
 bool notifyQueueSms(const char* sender, const char* message, const char* timestamp);
 
 // 入队一封邮件（正文已构建好，最长 NOTIFY_BODY_SIZE-1 字节，超出部分截断）
-bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType = MAIL_BODY_TEXT);
+bool notifyQueueEmail(const char* subject, const char* body, MailBodyType bodyType = MAIL_BODY_HTML);
 
 // 入队"管理员 SMS 命令"：先经模组把 content 发给 targetPhone，再把执行结果发邮件通知。
 // cmdText 为原始命令（仅用于回显到邮件正文）。

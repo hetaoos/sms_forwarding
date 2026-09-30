@@ -114,10 +114,11 @@ void sendEmailNotification(const char* subject, const char* body, MailBodyType b
   smtp.stop();
 }
 
-// 启动邮件表格行（HTML）
-static String startupRow(const String& key, const String& val) {
-  return "<tr><td style=\"padding:8px 0;width:96px;color:#888;vertical-align:top;white-space:nowrap;\">" + htmlEscape(key) +
-         "</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;word-break:break-all;\">" + htmlEscape(val) + "</td></tr>";
+// 带小标题的表格块（启动邮件各分组使用）
+static String mailSection(const String& caption, const String& rows) {
+  return "<div style=\"padding:0 20px 4px;\">"
+         "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">" + htmlEscape(caption) + "</div>"
+         "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">" + rows + "</table></div>";
 }
 
 // 发送"设备已启动"通知邮件：在模组初始化完成后调用，
@@ -180,67 +181,40 @@ void sendStartupEmail() {
   }
   String channelSummary = String(enabledChannels) + " 个已启用 / 共 " + String(MAX_PUSH_CHANNELS) + " 个";
 
-  // ---- HTML 富文本正文 ----
-  String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
-  html += "<div style=\"max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
-
-  // 头部标题栏
-  html += "<div style=\"background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
-  html += "<span style=\"font-size:17px;font-weight:600;\">🚀 短信转发器已启动</span>";
-  html += "</div>";
-
+  // ---- HTML 富文本正文（与其他通知邮件同一套卡片风格）----
   // 模组状态徽标
   String badgeBg = modemReady ? "#e6f7ec" : "#fff4e6";
   String badgeBorder = modemReady ? "#bfe9cd" : "#ffd9a8";
   String badgeColor = modemReady ? "#1a8a4a" : "#c97a00";
-  html += "<div style=\"margin:16px 20px 0;background:" + badgeBg + ";border:1px solid " + badgeBorder + ";border-radius:8px;padding:12px 16px;\">";
-  html += "<span style=\"font-size:14px;font-weight:600;color:" + badgeColor + ";\">" + htmlEscape(initStatus) + "</span>";
-  html += " <span style=\"font-size:13px;color:#666;\">" + htmlEscape(netStatus) + "</span>";
-  html += "</div>";
+  String inner = "<div style=\"margin:16px 20px 0;background:" + badgeBg + ";border:1px solid " + badgeBorder + ";border-radius:8px;padding:12px 16px;\">";
+  inner += "<span style=\"font-size:14px;font-weight:600;color:" + badgeColor + ";\">" + htmlEscape(initStatus) + "</span>";
+  inner += " <span style=\"font-size:13px;color:#666;\">" + htmlEscape(netStatus) + "</span>";
+  inner += "</div>";
 
   // 设备信息
-  html += "<div style=\"padding:16px 20px 4px;\">";
-  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📡 设备信息</div>";
-  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
-  html += startupRow("设备地址", deviceUrl);
-  html += startupRow("IP地址", ip);
-  html += startupRow("WiFi信号", String(wifiRssi) + " dBm");
-  html += startupRow("系统时间", timeStr);
-  html += startupRow("推送通道", channelSummary);
-  html += "</table></div>";
+  inner += "<div style=\"padding:16px 20px 4px;\">";
+  inner += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📡 设备信息</div>";
+  inner += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  inner += buildMailRow("设备地址", deviceUrl);
+  inner += buildMailRow("IP地址", ip);
+  inner += buildMailRow("WiFi信号", String(wifiRssi) + " dBm");
+  inner += buildMailRow("系统时间", timeStr);
+  inner += buildMailRow("推送通道", channelSummary);
+  inner += "</table></div>";
 
-  // 模组信息
-  html += "<div style=\"padding:0 20px 4px;\">";
-  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">🔧 模组信息</div>";
-  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
-  html += startupRow("制造商", manufacturer);
-  html += startupRow("型号", model);
-  html += startupRow("固件版本", version);
-  html += "</table></div>";
+  // 模组信息 / 信号状态 / 号码信息
+  inner += mailSection("🔧 模组信息", buildMailRow("制造商", manufacturer) +
+                                     buildMailRow("型号", model) +
+                                     buildMailRow("固件版本", version));
+  inner += mailSection("📶 信号状态", buildMailRow("评级", sigQuality) +
+                                     buildMailRow("RSRP", rsrpStr) +
+                                     buildMailRow("RSRQ", rsrqStr) +
+                                     buildMailRow("RSSI", rssiStr) +
+                                     buildMailRow("数据来源", sigSource));
+  inner += mailSection("📱 号码信息", buildMailRow("本机号码", ownNumber) +
+                                     buildMailRow("管理员号码", adminNumber));
 
-  // 信号状态
-  html += "<div style=\"padding:0 20px 4px;\">";
-  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📶 信号状态</div>";
-  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
-  html += startupRow("评级", sigQuality);
-  html += startupRow("RSRP", rsrpStr);
-  html += startupRow("RSRQ", rsrqStr);
-  html += startupRow("RSSI", rssiStr);
-  html += startupRow("数据来源", sigSource);
-  html += "</table></div>";
-
-  // 号码信息
-  html += "<div style=\"padding:0 20px 4px;\">";
-  html += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📱 号码信息</div>";
-  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
-  html += startupRow("本机号码", ownNumber);
-  html += startupRow("管理员号码", adminNumber);
-  html += "</table></div>";
-
-  // 底部标识
-  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;margin-top:12px;\">SMS Forwarder · 短信转发通知</div>";
-  html += "</div></div>";
-
+  String html = buildMailHtml("🚀 短信转发器已启动", inner, 600);
   sendEmailNotification("短信转发器已启动", html.c_str(), MAIL_BODY_HTML);
 }
 
@@ -326,6 +300,31 @@ String htmlEscape(const String& str) {
     else result += c;
   }
   return result;
+}
+
+// 表格行：左侧灰色字段名 + 右侧值（键值均已转义）
+String buildMailRow(const String& key, const String& val) {
+  return "<tr><td style=\"padding:8px 0;width:96px;color:#888;vertical-align:top;white-space:nowrap;\">" + htmlEscape(key) +
+         "</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;word-break:break-all;\">" + htmlEscape(val) + "</td></tr>";
+}
+
+// 把若干表格行包成带内边距的表格块
+String buildMailTable(const String& rows) {
+  return "<div style=\"padding:16px 20px 4px;\"><table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">" +
+         rows + "</table></div>";
+}
+
+// 完整 HTML 邮件正文：外层灰底 + 白色卡片 + 渐变标题栏 + 卡片主体 + 底部标识
+String buildMailHtml(const String& title, const String& inner, int maxWidth) {
+  String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
+  html += "<div style=\"max-width:" + String(maxWidth) + "px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
+  html += "<div style=\"background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
+  html += "<span style=\"font-size:17px;font-weight:600;\">" + title + "</span>";
+  html += "</div>";
+  html += inner;
+  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;margin-top:12px;\">SMS Forwarder · 短信转发通知</div>";
+  html += "</div></div>";
+  return html;
 }
 
 // 扫描某一类括号的全部出现，按"到最近边缘的距离"更新最优候选
@@ -831,12 +830,8 @@ bool notifyQueueAdminSms(const char* targetPhone, const char* content, const cha
   job.enqueuedAt = millis();
   copyField(job.sender, targetPhone, NOTIFY_SENDER_SIZE);      // 复用 sender 存目标号码
   copyField(job.message, content, NOTIFY_MESSAGE_SIZE);        // 短信正文
-  // 邮件正文：命令回显，执行结果在短信发出后追加
-  String body = "管理员命令执行结果:\n";
-  body += "命令: " + String(cmdText ? cmdText : "") + "\n";
-  body += "目标号码: " + String(targetPhone) + "\n";
-  body += "短信内容: " + String(content);
-  copyField(job.body, body.c_str(), NOTIFY_BODY_SIZE);
+  // 复用 body 存原始命令文本，结果邮件的 HTML 在发送时（含执行结果）才构建
+  copyField(job.body, cmdText ? cmdText : "", NOTIFY_BODY_SIZE);
 
   notifyTail = (notifyTail + 1) % NOTIFY_QUEUE_SIZE;
   notifyCount++;
@@ -855,10 +850,11 @@ bool notifyQueueReboot() {
   memset(&job, 0, sizeof(job));
   job.type = NOTIFY_JOB_REBOOT;
   job.stage = NOTIFY_STAGE_EMAIL;      // 先发邮件，发完（或超时）再重启
-  job.bodyType = (uint8_t)MAIL_BODY_TEXT;
+  job.bodyType = (uint8_t)MAIL_BODY_HTML;
   job.enqueuedAt = millis();
   copyField(job.subject, "重启命令已执行", NOTIFY_SUBJECT_SIZE);
-  copyField(job.body, "收到RESET命令，即将重启模组和ESP32...", NOTIFY_BODY_SIZE);
+  String inner = "<div style=\"padding:16px 20px;font-size:14px;color:#333;line-height:1.6;\">收到 RESET 命令，即将重启模组与 ESP32。</div>";
+  copyField(job.body, buildMailHtml("🔄 重启命令已执行", inner).c_str(), NOTIFY_BODY_SIZE);
 
   notifyTail = (notifyTail + 1) % NOTIFY_QUEUE_SIZE;
   notifyCount++;
@@ -891,36 +887,27 @@ static void buildSmsMail(const char* sender, const char* message, const char* ti
   }
 
   // 富文本（HTML）正文：卡片式布局，渐变标题栏 + 验证码高亮块 + 表格字段
-  html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
-  html += "<div style=\"max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
-
-  // 头部标题栏
-  html += "<div style=\"background:#2f6fed;background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
-  html += "<span style=\"font-size:17px;font-weight:600;\">📱 " + htmlEscape(subject) + "</span>";
-  html += "</div>";
+  String inner;
 
   // 验证码高亮块
   if (verifyCode.length() > 0) {
-    html += "<div style=\"margin:16px 20px 0;background:#fff4f4;border:1px solid #ffd0d0;border-radius:8px;padding:12px 16px;text-align:center;\">";
-    html += "<div style=\"font-size:12px;color:#c0392b;letter-spacing:2px;\">验证码</div>";
-    html += "<div style=\"font-size:28px;font-weight:700;color:#d00;letter-spacing:5px;margin-top:2px;\">" + htmlEscape(verifyCode) + "</div>";
-    html += "</div>";
+    inner += "<div style=\"margin:16px 20px 0;background:#fff4f4;border:1px solid #ffd0d0;border-radius:8px;padding:12px 16px;text-align:center;\">";
+    inner += "<div style=\"font-size:12px;color:#c0392b;letter-spacing:2px;\">验证码</div>";
+    inner += "<div style=\"font-size:28px;font-weight:700;color:#d00;letter-spacing:5px;margin-top:2px;\">" + htmlEscape(verifyCode) + "</div>";
+    inner += "</div>";
   }
 
   // 信息字段（表格）
-  html += "<div style=\"padding:16px 20px;\">";
-  html += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
-  html += "<tr><td style=\"padding:8px 0;width:64px;color:#888;vertical-align:top;\">发件人</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(sender));
-  if (senderName.length() > 0) html += " <span style=\"color:#2f6fed;\">(" + htmlEscape(senderName) + ")</span>";
-  html += "</td></tr>";
-  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(timestamp)) + "</td></tr>";
-  html += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">内容</td><td style=\"padding:8px 0;word-break:break-word;\">" + htmlEscape(String(message)) + "</td></tr>";
-  html += "</table></div>";
+  inner += "<div style=\"padding:16px 20px;\">";
+  inner += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  inner += "<tr><td style=\"padding:8px 0;width:64px;color:#888;vertical-align:top;\">发件人</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(sender));
+  if (senderName.length() > 0) inner += " <span style=\"color:#2f6fed;\">(" + htmlEscape(senderName) + ")</span>";
+  inner += "</td></tr>";
+  inner += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(timestamp)) + "</td></tr>";
+  inner += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">内容</td><td style=\"padding:8px 0;word-break:break-word;\">" + htmlEscape(String(message)) + "</td></tr>";
+  inner += "</table></div>";
 
-  // 底部标识
-  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;\">SMS Forwarder · 短信转发通知</div>";
-
-  html += "</div></div>";
+  html = buildMailHtml("📱 " + htmlEscape(subject), inner);
 }
 
 // 推进队首任务的一小步：发出一次网络请求后立刻返回
@@ -1040,9 +1027,15 @@ void processNotifyQueue() {
       notifyDequeue();
       return;
     }
-    String subject = job.smsOk ? "短信发送成功" : "短信发送失败";
-    String body = String(job.body) + "\n执行结果: " + (job.smsOk ? "成功" : "失败");
-    result = emailAttemptOnce(subject.c_str(), body.c_str(), MAIL_BODY_TEXT);
+    bool ok = job.smsOk;
+    String subject = ok ? "短信发送成功" : "短信发送失败";
+    // job.body 存原始命令文本，job.sender 为目标号码，job.message 为短信内容
+    String inner = buildMailTable(buildMailRow("命令", String(job.body)) +
+                                  buildMailRow("目标号码", String(job.sender)) +
+                                  buildMailRow("短信内容", String(job.message)) +
+                                  buildMailRow("执行结果", ok ? "成功" : "失败"));
+    String body = buildMailHtml(ok ? "✅ 短信发送成功" : "❌ 短信发送失败", inner);
+    result = emailAttemptOnce(subject.c_str(), body.c_str(), MAIL_BODY_HTML);
   } else {
     if (!emailConfigured()) {
       // 重启命令不依赖邮件，直接进入重启阶段
