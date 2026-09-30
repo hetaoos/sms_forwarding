@@ -1,5 +1,7 @@
 # 低成本短信转发器
 
+> 本项目基于 [chenxuuu/sms_forwarding](https://github.com/chenxuuu/sms_forwarding) 的源码 Fork 修改而来。
+
 > 当前分支为新方案，2022年的老方案请前往[luatos分支](https://github.com/chenxuuu/sms_forwarding/tree/old-luatos)。  
 本项目**仅用于接收短信**与进行保号相关功能。  
 多卡控制、通话、拨号、开放接口、自动化等功能，永远不会考虑支持，请勿提出相关需求。
@@ -100,6 +102,73 @@ ESP32C3 与 ML307R-DC 通过串口（UART）连接，接线如下：
 ```
 
 可通过USB连接ESP32C3进行编程和供电，正常工作时，可通过网页与模组进行AT通信，方便调试。
+
+## 刷机教程
+
+> 板型：**MakerGO ESP32 C3 SuperMini**  
+> FQBN：`esp32:esp32:makergo_c3_supermini:PartitionScheme=huge_app`  
+> 串口波特率：115200（日志）/ 460800（烧录）
+>
+> **重要**：固件体积已超默认分区 ~1.3MB 上限，编译/烧录**必须**带上 `:PartitionScheme=huge_app`（Arduino IDE 中则是 **工具 → 分区方案 → Huge App**）。本项目仅用 NVS 存配置、Web 页面为字符串常量，不依赖 SPIFFS/LittleFS/OTA，切换安全。
+
+### 方式一：命令行烧录（推荐，已验证）
+
+使用 `arduino-cli` 编译并烧录（`arduino-cli` 随 Arduino IDE 自带，路径按机器实际情况调整；所有相关目录**不能含中文路径**，否则编译失败）。
+
+```powershell
+# 1. 准备环境（路径按本机实际情况修改）
+$env:Path = "C:\Program Files\Arduino IDE\resources\app\lib\backend\resources;$env:Path"
+$env:ARDUINO_DIRECTORIES_DATA = "D:\dev\arduino_pack"
+$env:ARDUINO_DIRECTORIES_USER = "D:\dev\arduino_pack\user"
+
+# 2. 编译（首次约 3-5 分钟，不要提前中断；必须带 huge_app 分区）
+arduino-cli compile --fqbn esp32:esp32:makergo_c3_supermini:PartitionScheme=huge_app --build-path "D:\dev\arduino_pack\build" "项目路径\code"
+
+# 3. 烧录（--port 按真实串口修改，如 COM4 / /dev/ttyUSB0）
+arduino-cli upload --fqbn esp32:esp32:makergo_c3_supermini:PartitionScheme=huge_app --port COM4 --input-dir "D:\dev\arduino_pack\build" "项目路径\code"
+
+# 4. 查看串口日志（115200）
+arduino-cli monitor --port COM4 --config 115200
+```
+
+> 依赖库需在 Arduino IDE 中安装：**pdulib 0.5.11**、**ReadyMail 0.4.2**，ESP32 Core 版本 **3.3.10**。
+
+### 方式二：图形化烧录（适合只烧预编译固件）
+
+如果你拿到的是已编译好的 `sms_forwarding_full.bin`（含 bootloader + 分区表 + 固件），可使用浏览器免安装烧录：
+
+1. 用 Chrome / Edge（88+）打开 [ESPConnect](https://thelastoutpostworkshop.github.io/ESPConnect/)
+2. 波特率选择 `460800`，点击「连接」并选择 `USB JTAG/serial debug unit` 设备
+3. 进入「闪存工具」→「烧录固件」，上传 `sms_forwarding_full.bin`，从地址 `0x0` 开始烧录即可
+
+如需用命令行 `esptool` 烧录预编译固件：
+
+```bash
+pip install "esptool>=4.8"
+
+# 全量烧录（推荐，地址 0x0）
+esptool --chip esp32c3 --baud 460800 write_flash 0x0 sms_forwarding_full.bin
+```
+
+> 若自行用 arduino-cli 编译，构建产物中 `bootloader.bin` 对应 `0x1000`、`partitions.bin` 对应 `0x8000`、固件 `*.ino.bin` 对应 `0x10000`，可直接用上述 `esptool` 命令分地址写入。
+
+### 烧录时 USB 反复闪断怎么办
+
+如果插上 Type-C 后 USB 出现「连上又断了、连上又断了」反复闪断，导致无法正常烧录，可尝试以下两种方法：
+
+- **方法一（手动进入下载模式）**：插上 Type-C 后，**先按住 `BOOT` 键不松手**，再**按一下 `RST` 键**松开，此时设备进入下载模式，即可正常烧录（烧录完成后再松开 `BOOT`）。
+- **方法二（快速刷入）**：在设备 USB 刚连接上的瞬间，立刻点「连接 / 烧录」快速刷入，趁其还未断开时完成写入。
+
+### 首次配置
+
+烧录完成后，设备启动会尝试连接 `wifi_config.h` 中的默认 WiFi；若未配置或 20 秒连不上，将自动进入「配置 AP 模式」：
+
+1. 连接热点 `SMS-Forwarding-Setup`（密码见 `wifi_config.h` 的 `AP_PASS`，默认 `12345678`）
+2. 浏览器访问 `http://192.168.4.1`，默认账号/密码 `admin / admin123`
+3. 进入 **📶 WiFi 设置**，扫描并填入路由器 SSID/密码，保存后设备自动重启联网
+4. 联网后通过路由器分配的 IP 访问管理界面，添加并配置推送通道
+
+详见下方「WiFi 配置」章节。
 
 ## WiFi 配置
 
