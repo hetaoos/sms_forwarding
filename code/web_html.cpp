@@ -297,6 +297,20 @@ const char* htmlPage = R"rawliteral(
     <div class="panel" id="panel-push">
       <h1 class="page-title">推送通道</h1>
       <p class="page-subtitle">最多 5 个独立推送通道，支持 POST JSON、Bark、钉钉、飞书、PushPlus、Server酱、Gotify、Telegram</p>
+      <div class="card">
+        <div class="card-header">📌 可用占位符</div>
+        <div class="card-body">
+          <p class="form-hint" style="margin-bottom:10px;">自定义模板与 GET 请求支持以下占位符，短信到达时自动替换为实际内容：</p>
+          <table class="info-table">
+            <tr><td>{sender}</td><td>发送者号码（如 +8613800138000）</td></tr>
+            <tr><td>{message}</td><td>短信正文内容</td></tr>
+            <tr><td>{timestamp}</td><td>短信接收时间（如 2026-01-01 12:00:00）</td></tr>
+            <tr><td>{sender_name}</td><td>发送者名称（自动从短信【】/[] 中解析，无则空）</td></tr>
+            <tr><td>{verify_code}</td><td>验证码（自动提取短信中首个 4~6 位数字，无则空）</td></tr>
+            <tr><td>{sender_display}</td><td>显示名称（优先 sender_name，否则回退到 sender）</td></tr>
+          </table>
+        </div>
+      </div>
       <form action="/save" method="POST" id="mainForm3">
       <div class="card">
         <div class="card-header">🔗 通道配置</div>
@@ -494,16 +508,16 @@ const char* htmlPage = R"rawliteral(
       document.getElementById('key2' + idx).placeholder = '';
       var kg = document.getElementById('key2group' + idx);
       if (kg) kg.style.display = 'none';
-      if (type == 1) hint.innerHTML = 'POST JSON<br>{"sender":"+8613800138000","message":"...","timestamp":"2026-01-01 12:00:00"}';
-      else if (type == 2) hint.innerHTML = 'Bark (iOS)<br>POST {"title":"发送者","body":"短信内容"}';
-      else if (type == 3) hint.innerHTML = 'GET 请求<br>URL?sender=xxx&message=xxx&timestamp=xxx';
-      else if (type == 4) { hint.innerHTML = '钉钉机器人<br>填写 Webhook 地址，加签需填 Secret'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（加签密钥，可选）'; document.getElementById('key1'+idx).placeholder='SEC...'; }
+      if (type == 1) hint.innerHTML = 'POST JSON<br>{<br>&nbsp;"sender":"+8613800138000",<br>&nbsp;"message":"短信内容",<br>&nbsp;"timestamp":"2026-01-01 12:00:00",<br>&nbsp;"sender_name":"发送者名称",<br>&nbsp;"verify_code":"123456",<br>&nbsp;"sender_display":"显示名称"<br>}';
+      else if (type == 2) hint.innerHTML = 'Bark (iOS)<br>POST {"title":"标题或验证码","body":"短信内容（含发送者/验证码）"}';
+      else if (type == 3) hint.innerHTML = 'GET 请求<br>URL?sender=xxx&message=xxx&timestamp=xxx&sender_name=xxx&verify_code=xxx&sender_display=xxx';
+      else if (type == 4) { hint.innerHTML = '钉钉机器人<br>填写 Webhook 地址，加签需填 Secret（详见上方占位符说明）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（加签密钥，可选）'; document.getElementById('key1'+idx).placeholder='SEC...'; }
       else if (type == 5) { hint.innerHTML = 'PushPlus<br>填写 Token，URL 留空使用默认'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token'; document.getElementById('key1'+idx).placeholder='pushplus token'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='发送渠道'; document.getElementById('key2'+idx).placeholder='wechat / extension / app'; }
-      else if (type == 6) { hint.innerHTML = 'Server酱<br>填写 SendKey，URL 留空使用默认'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='SendKey'; document.getElementById('key1'+idx).placeholder='SCT...'; }
-      else if (type == 7) { hint.innerHTML = '自定义模板<br>使用 {sender} {message} {timestamp} {sender_name} {verify_code} {sender_display} 占位符'; custom.style.display='block'; }
-      else if (type == 8) { hint.innerHTML = '飞书机器人<br>已预填官方地址，需在其末尾拼接你的 Hook Token；签名验证另填 Secret'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（签名密钥，可选）'; document.getElementById('key1'+idx).placeholder='飞书签名密钥'; }
-      else if (type == 9) { hint.innerHTML = 'Gotify<br>填写服务器地址 + 应用 Token'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token（应用 Token）'; document.getElementById('key1'+idx).placeholder='A...'; }
-      else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
+      else if (type == 6) { hint.innerHTML = 'Server酱<br>填写 SendKey，URL 留空使用默认（标题含验证码/发送者，正文含内容）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='SendKey'; document.getElementById('key1'+idx).placeholder='SCT...'; }
+      else if (type == 7) { hint.innerHTML = '自定义模板<br>可使用占位符：{sender} {message} {timestamp} {sender_name} {verify_code} {sender_display}'; custom.style.display='block'; }
+      else if (type == 8) { hint.innerHTML = '飞书机器人<br>已预填官方地址，需在其末尾拼接你的 Hook Token；签名验证另填 Secret（详见上方占位符说明）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（签名密钥，可选）'; document.getElementById('key1'+idx).placeholder='飞书签名密钥'; }
+      else if (type == 9) { hint.innerHTML = 'Gotify<br>填写服务器地址 + 应用 Token（标题含验证码/发送者，正文含内容）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token（应用 Token）'; document.getElementById('key1'+idx).placeholder='A...'; }
+      else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2），消息含发送者/验证码/内容'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
     }
     document.addEventListener('DOMContentLoaded', function() {
       for (var i = 0; i < 5; i++) { toggleChannel(i); updateTypeHint(i); }
