@@ -12,10 +12,12 @@ $env:ARDUINO_DIRECTORIES_DATA = "D:\dev\arduino_pack"
 $env:ARDUINO_DIRECTORIES_USER = "D:\dev\arduino_pack\user"
 
 # 编译（首次约 3-5 分钟，不要提前中断）
-arduino-cli compile --fqbn esp32:esp32:makergo_c3_supermini --build-path "D:\dev\arduino_pack\build" "<项目路径>\code"
+# 固件已接近默认分区 ~1.3MB 上限，需使用 huge_app 分区（无文件系统/OTA，App 约 3MB）
+# 本项目仅用 NVS 存配置、Web 页面为字符串常量，不依赖 SPIFFS/LittleFS/OTA，切换安全
+arduino-cli compile --fqbn esp32:esp32:makergo_c3_supermini:PartitionScheme=huge_app --build-path "D:\dev\arduino_pack\build" "<项目路径>\code"
 
 # 烧录
-arduino-cli upload --fqbn esp32:esp32:makergo_c3_supermini --port COM4 --input-dir "D:\dev\arduino_pack\build" "<项目路径>\code"
+arduino-cli upload --fqbn esp32:esp32:makergo_c3_supermini:PartitionScheme=huge_app --port COM4 --input-dir "D:\dev\arduino_pack\build" "<项目路径>\code"
 
 # 串口日志（115200）
 arduino-cli monitor --port COM4 --config 115200
@@ -26,6 +28,7 @@ arduino-cli monitor --port COM4 --config 115200
 - 依赖库：pdulib 0.5.11、ReadyMail 0.4.2、ESP32 Core 3.3.10。
 - `.github/agent/编译烧录实测.md` 是已验证的可靠流程，优先参考。
 - 本机实际项目路径为 `C:\Users\chenx\Desktop\git-repos\sms_forwarding`（非 ASCII 路径仅限源码位置；build 目录必须放在纯英文路径）。
+- 固件已超默认分区 ~1.3MB 上限，编译/烧录必须带 `:PartitionScheme=huge_app`（见上面的命令）。用 Arduino IDE 时则在 **工具 → 分区方案** 选择 **Huge App**。
 
 ## 工程结构
 
