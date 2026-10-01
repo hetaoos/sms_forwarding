@@ -190,6 +190,7 @@ void sendStartupEmail() {
   inner += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
   inner += buildMailRow("设备地址", deviceUrl);
   inner += buildMailRow("IP地址", ip);
+  inner += buildMailRow("MAC地址", WiFi.macAddress());
   inner += buildMailRow("WiFi信号", String(wifiRssi) + " dBm");
   inner += buildMailRow("推送通道", channelSummary);
   inner += "</table></div>";
