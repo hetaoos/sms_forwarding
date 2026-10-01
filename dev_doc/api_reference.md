@@ -131,6 +131,47 @@
 
 **说明**: 初始化过程本身是同步的，但所有等待都走 `server.handleClient()`，因此不会让网页长时间无响应。
 
+**与 SIM 检测的关系**: SIM 确实未插入（`simKnownAbsent()`）时本函数只顺延计时、不重试，避免没卡时反复断电重启；插卡事件由 `simHotplugTick()` 捕获并立刻触发初始化。
+
+---
+
+### `SimStatus getSimStatus()`
+**用途**: 实时查询 SIM 卡状态（`AT+CPIN?`），一次串口收发，模组忙时不要调用。
+
+**返回**:
+
+| 值 | 触发条件 | 含义 |
+|---|---|---|
+| `SIM_STATUS_READY` | `+CPIN: READY` | 已插入且可用 |
+| `SIM_STATUS_ABSENT` | `+CPIN: NOT INSERTED` / `NOT READY` / `REMOVED`，或有响应但无 `+CPIN`（如 `+CME ERROR: SIM not inserted`） | 未插卡 |
+| `SIM_STATUS_LOCKED` | `+CPIN: SIM PIN` / `SIM PUK` | 插着但要解锁 |
+| `SIM_STATUS_UNKNOWN` | 查询超时、模组无响应 | 不判定（交由 `modemAutoRecover()`） |
+
+---
+
+### `void simHotplugTick()`
+**用途**: 由 `loop()` 每轮调用，实现运行中换卡自动生效。
+
+**流程**:
+1. `modemBusy()` 为真（初始化/发短信占用串口）时直接返回
+2. 若有已安排的兜底重启（插卡后初始化失败 15 秒）→ 断电重启模组并重新初始化（每次插卡最多一次）
+3. 若检测到插卡 → 等 `SIM_INSERT_SETTLE_MS`（2 秒）让模组完成 SIM 识别 → `modemInit(true)` 自动初始化
+4. 每 `SIM_POLL_INTERVAL_MS`（20 秒）轮询一次 `AT+CPIN?`，更新状态
+
+**状态变化时**: `ABSENT` → 置 `modemReady=false` 并点亮 LED（防止继续发短信）；`ABSENT/LOCKED → READY` 且模组未就绪 → 触发上面的自动初始化。
+
+---
+
+### `void handleSimUrc(const String& params)`
+**用途**: URC 回调入口，处理模组主动上报的 `+CPIN: READY` / `+CPIN: NOT INSERTED`（插拔卡时无需等轮询）。
+
+**约束**: 只更新状态、置标记并打日志，绝不在此做初始化/网络操作——真正的初始化由 `simHotplugTick()` 在主循环执行。
+
+---
+
+### `bool isSimInserted()` / `String simStatusText()`
+**用途**: 返回**最近一次**检测结果的布尔值与展示文案（已插入/未插入/需 PIN/PUK 解锁/未知），不发起 AT 查询，供页面展示使用。
+
 ---
 
 ### `bool sendATandWaitOK(const char* cmd, unsigned long timeout)`
@@ -474,7 +515,7 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 |---|---|---|
 | `ati` | `ATI` | 制造商/型号/固件版本 |
 | `signal` | `AT+CESQ` + `AT+CSQ`（`getModemSignal()`） | RSRP/RSRQ/RSSI/BER |
-| `siminfo` | `AT+CIMI` `AT+ICCID` `AT+CNUM` | IMSI/ICCID/本机号码 |
+| `siminfo` | `simStatusText()` + `AT+CIMI` `AT+ICCID` `AT+CNUM` | SIM 卡状态/IMSI/ICCID/本机号码 |
 | `network` | `AT+CEREG?` `AT+COPS?` `AT+CGACT?` `AT+CGDCONT?` | 注册/运营商/数据/APN |
 | `wifi` | (WiFi 对象) | SSID/RSSI/IP/网关/DNS/MAC/BSSID/信道 |
 

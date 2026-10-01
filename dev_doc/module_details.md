@@ -74,9 +74,13 @@
 server.handleClient();        // 1. 处理HTTP请求
 if(!configValid) { ... }      // 2. 配置无效时每秒打印IP
 checkConcatTimeout();          // 3. 长短信超时合并转发
-if(Serial.available())        // 4. USB->模组透传(单字节)
+simHotplugTick();              // 4. SIM 热插拔检测（插卡自动初始化/拔卡置未就绪）
+modemAutoRecover();            // 5. 模组未就绪时按退避间隔重试初始化
+modemTimeSyncTick();           // 6. 用 4G 网络时间校准系统时间
+if(Serial.available())         // 7. USB->模组透传(单字节)
     Serial1.write(Serial.read());
-checkSerial1URC();             // 5. 检查模组URC(短信上报)
+checkSerial1URC();             // 8. 模组URC解析(短信/SIM 上报)
+processNotifyQueue();          // 9. 分片发送推送与邮件（每轮最多一次网络请求）
 ```
 
 ### 修改指南
@@ -243,11 +247,31 @@ ESP32                         模组
   │◄──────────────── OK       │
 ```
 
+### SIM 卡热插拔检测
+
+```
+检测入口（两条）:
+  loop() → simHotplugTick()            每 20 秒 AT+CPIN? 轮询
+  checkSerial1URC() → handleSimUrc()   模组主动上报的 +CPIN: READY / NOT INSERTED
+
+状态机（modem.cpp 内部静态变量）:
+  SIM_STATUS_UNKNOWN ──检测到卡──► READY ──2 秒后──► modemInit(true)
+        ▲                            │
+        │                            └──初始化失败──► 15 秒后断电重启一次（仅一次）
+        └────── 拔出（ABSENT）────────┘
+```
+
+- 插卡：`READY` 且 `!modemReady` → 等 2 秒 → `modemInit(true)`；仍失败则断电重启兜底一次，再不行交给 `modemAutoRecover()`
+- 拔卡：立刻 `modemReady=false` 并点亮 LED（LED 亮 = 模组不可用），同时让 `modemAutoRecover()` 暂停重试（没卡时重试只会白白断电重启）
+- 需要 PIN/PUK 的卡判为 `LOCKED`，只告警不初始化
+- 所有耗时动作都在 `simHotplugTick()` 里执行，URC 回调只置标记；`modemBusy()` 为真时跳过轮询
+
 ### 修改指南
 
 - **更换模组型号**: 修改 `modemPowerCycle()` 的时序参数，调整 AT 指令序列
 - **添加新 AT 功能**: 实现新函数，使用 `sendATCommand()` 或直接操作 `Serial1`
 - **调波特率**: 修改 `Serial1.begin()` 参数 + 模组 AT 配置
+- **调 SIM 检测节奏**: 改 `SIM_POLL_INTERVAL_MS` / `SIM_INSERT_SETTLE_MS` / `SIM_REBOOT_DELAY_MS`
 
 ---
 

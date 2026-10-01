@@ -204,7 +204,8 @@ void handleRoot() {
   bool emailOk = config.smtpServer.length() > 0 && config.smtpUser.length() > 0 &&
                  config.smtpPass.length() > 0 && config.smtpSendTo.length() > 0;
   html.replace("%SMTP_CHECK%", emailOk ? "已配置" : "未配置");
-  html.replace("%MODEM_CHECK%", modemReady ? "已就绪" : "未就绪");
+  // 模组状态附带 SIM 卡状态，便于直接看出「没插卡」还是「插了卡没注册上网络」
+  html.replace("%MODEM_CHECK%", modemReady ? String("已就绪") : "未就绪（SIM " + simStatusText() + "）");
   int pushCount = 0;
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     if (config.pushChannels[i].enabled) pushCount++;
@@ -468,6 +469,9 @@ void handleQuery() {
     success = true;
     message = "<table class='info-table'>";
     
+    // SIM 卡状态（热插拔检测的最近一次结果，不占用串口）
+    message += "<tr><td>SIM 卡状态</td><td>" + simStatusText() + "</td></tr>";
+
     // 查询IMSI
     String resp = sendATCommand("AT+CIMI", 2000);
     String imsi = "未知";

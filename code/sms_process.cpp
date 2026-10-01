@@ -318,6 +318,13 @@ static void handleModemLine(const String& line) {
   // 打印到调试串口
   logCaptureLn(String("Debug> " + line));
 
+  // SIM 插拔上报（+CPIN: READY / +CPIN: NOT INSERTED ...）：与短信状态机无关，
+  // 这里只交给 modem.cpp 记录状态，真正的初始化由主循环的 simHotplugTick() 执行
+  if (line.startsWith("+CPIN:")) {
+    handleSimUrc(line.substring(6));
+    return;
+  }
+
   if (urcState == IDLE) {
     // 检测到短信上报URC头
     if (line.startsWith("+CMT:")) {

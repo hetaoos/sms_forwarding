@@ -22,6 +22,15 @@ bool modemBusy();
 bool getModemSignal(SignalInfo& info);
 // 获取本机号码（SIM 卡 MSISDN，AT+CNUM），取不到时返回空串
 String getModemOwnNumber();
+// ---- SIM 卡热插拔检测 ----
+// 运行中换卡不必重启设备：主循环每 20 秒轮询 AT+CPIN?，并用模组主动上报的 +CPIN URC 做快速通道。
+// 插卡 → 自动重跑模组初始化（AT 握手 → CNMI → PDU → 等网络注册），失败再兜底断电重启一次；
+// 拔卡 → 立刻置为未就绪，避免继续发短信、也免掉 modemAutoRecover() 无意义的反复断电重启。
+SimStatus getSimStatus();    // 实时查询（占用一次串口收发，模组忙时不要调用）
+bool isSimInserted();        // 最近一次检测结果：卡是否插着（不发 AT，供页面展示）
+String simStatusText();      // 最近一次状态的展示文案：已插入/未插入/需解锁/未知
+void simHotplugTick();       // 主循环调用：轮询状态 + 执行插卡后的自动初始化
+void handleSimUrc(const String& params);  // URC 回调：处理 "+CPIN:" 上报（只置标记，不做初始化）
 // ---- 模组时钟 / 系统时间 ----
 // 读取模组的网络时间（AT+CCLK?），解析为 UTC 时间戳 + 本地时间文案
 bool getModemTime(ModemTimeInfo& info);

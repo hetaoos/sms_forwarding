@@ -122,6 +122,7 @@ void loop() {
     }
   }
   checkConcatTimeout();
+  simHotplugTick();      // SIM 热插拔检测：插卡自动初始化 / 拔卡置未就绪
   modemAutoRecover();
   modemTimeSyncTick();   // 模组就绪后用 4G 网络时间校准系统时间，之后每 24 小时再校准一次
   if (Serial.available()) Serial1.write(Serial.read());

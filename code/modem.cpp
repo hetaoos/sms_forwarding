@@ -15,6 +15,7 @@
 #define SMS_RESULT_TIMEOUT_MS     12000UL // 等待 +CMGS/OK 的上限
 
 static bool trySyncModemTime();   // 定义在「模组时钟」小节：模组就绪后尝试同步一次网络时间
+static bool simKnownAbsent();     // 定义在「SIM 卡热插拔检测」小节：确实没插卡时为 true
 
 // 串口占用标记：短信发送/模组初始化期间独占 Serial1。
 // HTTP 处理器据此快速失败，避免嵌套调用把对方的提示符和结果吞掉而双双卡到超时。
@@ -230,6 +231,12 @@ void modemAutoRecover() {
 
   if (modemReady) {
     reinitInterval = MODEM_REINIT_INTERVAL_MS;
+    return;
+  }
+  // SIM 卡确实不在时不必反复重试：重试过程里含断电重启，没卡时只会白折腾模组。
+  // 插卡事件由 simHotplugTick() 捕获并立刻触发一次初始化。
+  if (simKnownAbsent()) {
+    lastModemInitAttempt = millis();
     return;
   }
   if (millis() - lastModemInitAttempt < reinitInterval) return;
@@ -467,6 +474,176 @@ String getModemOwnNumber() {
     }
   }
   return "";
+}
+
+// ---- SIM 卡热插拔检测 ----
+// 轮询 AT+CPIN?（主循环每 SIM_POLL_INTERVAL_MS 一次）+ 解析模组主动上报的 +CPIN URC。
+// 所有耗时动作（初始化、断电重启）都只在 simHotplugTick() 里、且模组串口空闲时执行，
+// URC 回调只置标记，绝不在回调里跑初始化。
+#define SIM_POLL_INTERVAL_MS  20000UL  // SIM 状态轮询间隔
+#define SIM_INSERT_SETTLE_MS  2000UL   // 检测到插卡后，留给模组完成 SIM 上电/识别的时间
+#define SIM_REBOOT_DELAY_MS   15000UL  // 首次初始化未成功时，等待这么久再做一次断电重启兜底
+
+static SimStatus s_simStatus = SIM_STATUS_UNKNOWN;  // 最近一次检测到的 SIM 状态
+static unsigned long s_lastSimPoll = 0;             // 上次轮询时刻
+static bool s_simInitPending = false;               // 已检测到插卡，等到稳定后再跑初始化
+static unsigned long s_simInitAt = 0;               // 检测到插卡的时刻
+static bool s_simRebootTried = false;               // 本次插卡是否已做过断电重启兜底
+static unsigned long s_simRebootAt = 0;             // 兜底断电重启的预定时刻（0=未安排）
+
+// 解析 +CPIN 的参数体：READY / SIM PIN / SIM PUK / NOT INSERTED ...
+static SimStatus parseSimState(const String& body) {
+  String p = body;
+  p.toUpperCase();
+  if (p.indexOf("READY") >= 0) return SIM_STATUS_READY;
+  if (p.indexOf("NOT INSERTED") >= 0 || p.indexOf("NOT READY") >= 0 ||
+      p.indexOf("REMOVED") >= 0) return SIM_STATUS_ABSENT;
+  if (p.indexOf("PIN") >= 0 || p.indexOf("PUK") >= 0) return SIM_STATUS_LOCKED;
+  return SIM_STATUS_UNKNOWN;
+}
+
+SimStatus getSimStatus() {
+  String resp = sendATCommand("AT+CPIN?", 3000);
+  if (resp.indexOf("+CPIN:") >= 0) {
+    SimStatus st = parseSimState(extractParams(resp, "+CPIN:"));
+    if (st != SIM_STATUS_UNKNOWN) return st;
+  }
+  // 完全无响应（模组掉电/串口异常）：不判定，交给 modemAutoRecover() 处理
+  if (resp.length() == 0) return SIM_STATUS_UNKNOWN;
+  // 有响应但没有可用的 +CPIN（典型为 "+CME ERROR: SIM not inserted"）→ 认为卡不在
+  return SIM_STATUS_ABSENT;
+}
+
+bool isSimInserted() {
+  return s_simStatus == SIM_STATUS_READY || s_simStatus == SIM_STATUS_LOCKED;
+}
+
+String simStatusText() {
+  switch (s_simStatus) {
+    case SIM_STATUS_READY:  return String("已插入");
+    case SIM_STATUS_ABSENT: return String("未插入");
+    case SIM_STATUS_LOCKED: return String("需 PIN/PUK 解锁");
+    default:                return String("未知");
+  }
+}
+
+// SIM 确实不在时为 true：modemAutoRecover() 据此跳过无意义的重试
+static bool simKnownAbsent() {
+  return s_simStatus == SIM_STATUS_ABSENT;
+}
+
+// 安排插卡后的自动初始化
+static void scheduleSimInit(unsigned long now) {
+  s_simInitPending = true;
+  s_simInitAt = now;
+  s_simRebootTried = false;
+}
+
+// 插卡后的自动初始化；失败时安排一次（且仅一次）断电重启兜底——
+// 部分模组必须重启 SIM 接口才能真正识别新插入的卡
+static void runSimInsertInit() {
+  logCaptureLn(String("SIM 卡已就绪，开始自动初始化模组..."));
+  if (modemInit(true)) {
+    ledOff();
+    logCaptureLn(String("✅ 插卡后模组初始化成功，短信收发已恢复"));
+    return;
+  }
+  if (s_simRebootTried) {
+    logCaptureLn(String("⚠️ 插卡后初始化仍未成功，交由自动恢复继续重试"));
+    return;
+  }
+  s_simRebootTried = true;
+  s_simRebootAt = millis();
+  logCaptureLn(String("⚠️ 模组暂未识别新卡，" + String(SIM_REBOOT_DELAY_MS / 1000) +
+                      " 秒后将断电重启一次（仅此一次）"));
+}
+
+// 兜底：断电重启模组后重新初始化（有界，每次插卡最多一次）
+static void powerCycleForSim() {
+  logCaptureLn(String("正在断电重启模组以重新识别 SIM 卡..."));
+  modemPowerCycle();
+  if (modemInit(true)) {
+    ledOff();
+    logCaptureLn(String("✅ 重启后模组已就绪"));
+  } else {
+    logCaptureLn(String("⚠️ 重启后模组仍未就绪，交由自动恢复继续重试"));
+  }
+}
+
+// 记录一次检测结果并按需触发动作（轮询与 URC 共用）
+static void applySimStatus(SimStatus st) {
+  if (st == SIM_STATUS_UNKNOWN) return;
+  SimStatus prev = s_simStatus;
+  s_simStatus = st;
+
+  if (st == SIM_STATUS_ABSENT) {
+    s_simRebootTried = false;
+    s_simRebootAt = 0;
+    if (prev == SIM_STATUS_READY || prev == SIM_STATUS_LOCKED) {
+      logCaptureLn(String("⚠️ 检测到 SIM 卡已拔出，短信收发不可用"));
+    }
+    if (modemReady) {
+      modemReady = false;
+      digitalWrite(LED_BUILTIN, LOW);   // 点亮指示灯表示模组不可用（与初始化失败一致）
+      logCaptureLn(String("模组已置为未就绪，插入 SIM 卡后会自动初始化"));
+    }
+    return;
+  }
+
+  if (st == SIM_STATUS_LOCKED) {
+    if (prev != SIM_STATUS_LOCKED) {
+      logCaptureLn(String("⚠️ SIM 卡需要 PIN/PUK 解锁，无法收发短信"));
+    }
+    return;
+  }
+
+  // SIM_STATUS_READY
+  if (prev == SIM_STATUS_ABSENT) logCaptureLn(String("检测到 SIM 卡插入"));
+  else if (prev == SIM_STATUS_LOCKED) logCaptureLn(String("检测到 SIM 卡已解锁"));
+  else if (prev == SIM_STATUS_UNKNOWN) logCaptureLn(String("SIM 卡状态: READY"));
+
+  if (!modemReady && !s_simInitPending && s_simRebootAt == 0) {
+    scheduleSimInit(millis());
+    logCaptureLn(String("SIM 已就绪，" + String(SIM_INSERT_SETTLE_MS / 1000) + " 秒后自动初始化模组"));
+  }
+}
+
+// URC 回调：模组主动上报 SIM 状态（+CPIN: READY / +CPIN: NOT INSERTED）
+// 只更新状态与标记，真正的初始化留给 simHotplugTick()，避免在串口读取路径里长时间阻塞
+void handleSimUrc(const String& params) {
+  SimStatus st = parseSimState(params);
+  if (st == SIM_STATUS_UNKNOWN) return;
+  logCaptureLn(String("模组上报 SIM 状态: " + params));
+  applySimStatus(st);
+}
+
+// 主循环调用：轮询 SIM 状态并执行插卡后的自动初始化
+void simHotplugTick() {
+  if (modemBusy()) return;   // 初始化/发短信期间独占串口，不插队查询
+
+  unsigned long now = millis();
+
+  // 1) 插卡后初始化失败的兜底断电重启
+  if (s_simRebootAt != 0) {
+    if (now - s_simRebootAt < SIM_REBOOT_DELAY_MS) return;
+    s_simRebootAt = 0;
+    if (!modemReady && getSimStatus() == SIM_STATUS_READY) powerCycleForSim();
+    return;
+  }
+
+  // 2) 检测到插卡，等模组完成 SIM 识别后跑一次初始化
+  if (s_simInitPending) {
+    if (now - s_simInitAt < SIM_INSERT_SETTLE_MS) return;
+    s_simInitPending = false;
+    if (modemReady) return;   // 期间已由别处（如网页重启）初始化成功
+    runSimInsertInit();
+    return;
+  }
+
+  // 3) 常规轮询（插卡与拔卡都要能发现）
+  if (now - s_lastSimPoll < SIM_POLL_INTERVAL_MS) return;
+  s_lastSimPoll = now;
+  applySimStatus(getSimStatus());
 }
 
 // ---- 模组时钟（AT+CCLK?）----

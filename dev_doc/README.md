@@ -33,6 +33,7 @@
 6. **系统日志** — Web 端实时查看设备串口日志，自动刷新，最多保留 120 行
 7. **管理员命令** — 通过短信远程执行 SMS:发送 和 RESET 命令（仅限管理员号码）
 8. **号码黑名单** — 支持按号码过滤骚扰短信
+9. **SIM 卡热插拔** — 运行中换卡自动检测：插卡自动重跑模组初始化，拔卡立即置未就绪
 
 ## 支持推送平台
 
@@ -101,8 +102,11 @@ loop()
   ├── server.handleClient()     // HTTP 请求处理
   ├── 配置无效时每秒打印 IP
   ├── checkConcatTimeout()      // 长短信超时检查
+  ├── simHotplugTick()          // SIM 热插拔检测（插卡自动初始化）
+  ├── modemAutoRecover()        // 模组未就绪时定时重试初始化
   ├── Serial → Serial1 透传    // USB → 模组 AT 透传
-  └── checkSerial1URC()        // 模组 URC 解析（短信上报）
+  ├── checkSerial1URC()         // 模组 URC 解析（短信/SIM 上报）
+  └── processNotifyQueue()      // 分片发送推送与邮件
 ```
 
 ## 关键设计决策

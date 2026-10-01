@@ -109,6 +109,14 @@ struct ModemTimeInfo {
   ModemTimeInfo() : valid(false), epochUtc(0), tzQuarterHours(0) {}
 };
 
+// ---- SIM 卡状态（热插拔检测，来源 AT+CPIN? / +CPIN URC）----
+enum SimStatus {
+  SIM_STATUS_UNKNOWN = 0,  // 查询失败或模组无响应：不做任何判定，避免误动作
+  SIM_STATUS_ABSENT,       // 未插入 SIM 卡（+CPIN: NOT INSERTED / +CME ERROR）
+  SIM_STATUS_READY,        // 已插入且可用
+  SIM_STATUS_LOCKED        // 已插入但需要 PIN/PUK 解锁，无法收发短信
+};
+
 // 展示时区偏移（小时）：系统内部统一保存 UTC 时间戳，展示时加该偏移（默认北京时间 UTC+8）
 #define DISPLAY_TZ_OFFSET_HOURS 8
 
