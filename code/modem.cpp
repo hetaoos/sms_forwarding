@@ -111,6 +111,74 @@ static bool sendATWithRetry(const char* cmd, unsigned long timeout, int maxAttem
   return false;
 }
 
+// 解析 ATI 响应，提取制造商/型号/固件版本。
+// 不依赖固定行序：先挑出以 "Revision"/"Rev:" 开头的版本行，剩余行按数量判断制造商与型号。
+// 覆盖 ML307 常见格式：
+//   单行型号：         "ML307C-DC-CN-MBRH0S00"                → 型号
+//   制造商+型号：       "Mobiletek" / "ML307C-..."             → 制造商 / 型号
+//   含版本行：         "... / ML307C-... / Revision: ML307C-..." → 制造商 / 型号 / 版本
+void parseATI(const String& resp, String& outManufacturer, String& outModel, String& outVersion) {
+  outManufacturer = "未知";
+  outModel = "未知";
+  outVersion = "未知";
+
+  // 逐行收集有效内容（排除回显的 ATI 与结尾 OK）
+  String lines[8];
+  int nLines = 0;
+  int lineStart = 0;
+  for (int i = 0; i < resp.length() && nLines < 8; i++) {
+    if (resp.charAt(i) == '\n' || i == resp.length() - 1) {
+      String line = resp.substring(lineStart, i);
+      line.trim();
+      lineStart = i + 1;
+      if (line.length() > 0 && line != "ATI" && line != "OK") {
+        lines[nLines++] = line;
+      }
+    }
+  }
+
+  // 先挑出版本行（以 Revision / Rev: 开头，大小写不敏感）
+  int versionIdx = -1;
+  for (int i = 0; i < nLines; i++) {
+    String low = lines[i];
+    low.toLowerCase();
+    if (low.startsWith("revision") || low.startsWith("rev:")) {
+      String v = lines[i];
+      int colon = v.indexOf(':');
+      if (colon >= 0) v = v.substring(colon + 1);
+      v.trim();
+      outVersion = v.length() > 0 ? v : lines[i];
+      versionIdx = i;
+      break;
+    }
+  }
+
+  // 去掉版本行后，按剩余行数判断制造商/型号
+  String rest[8];
+  int nRest = 0;
+  for (int i = 0; i < nLines; i++) {
+    if (i != versionIdx) rest[nRest++] = lines[i];
+  }
+
+  if (nRest == 1) {
+    outModel = rest[0];
+  } else if (nRest == 2) {
+    outManufacturer = rest[0];
+    outModel = rest[1];
+  } else if (nRest >= 3) {
+    outManufacturer = rest[0];
+    // 若第 3 行以第 2 行开头（第 2 行是型号族、第 3 行是完整 Part Number，
+    // 如 "ML307C" / "ML307C-DC-CN-MBRH0S00"），型号取完整串；
+    // 否则按常规把第 2 行当型号、第 3 行当版本。
+    if (rest[2].startsWith(rest[1])) {
+      outModel = rest[2];
+    } else {
+      outModel = rest[1];
+      if (outVersion == "未知") outVersion = rest[2];
+    }
+  }
+}
+
 // 模组 AT 初始化流程（setup 中调用，resetModule 后也调用）
 // background=true 表示后台自动恢复，使用更少的重试次数，尽量少阻塞主循环
 // 返回 true 表示模组可用（已注册网络且短信参数配置成功）
@@ -144,27 +212,11 @@ bool modemInit(bool background) {
   String resp = sendATCommand("ATI", 2000);
   logCaptureLn(String("ATI响应: " + resp));
   if (resp.indexOf("OK") >= 0) {
-    // 解析ATI响应
+    // 解析ATI响应（按关键字识别，不依赖固定行序）
     String manufacturer = "未知";
     String model = "未知";
     String version = "未知";
-    
-    // 按行解析
-    int lineStart = 0;
-    int lineNum = 0;
-    for (int i = 0; i < resp.length(); i++) {
-      if (resp.charAt(i) == '\n' || i == resp.length() - 1) {
-        String line = resp.substring(lineStart, i);
-        line.trim();
-        if (line.length() > 0 && line != "ATI" && line != "OK") {
-          lineNum++;
-          if (lineNum == 1) manufacturer = line;
-          else if (lineNum == 2) model = line;
-          else if (lineNum == 3) version = line;
-        }
-        lineStart = i + 1;
-      }
-    }
+    parseATI(resp, manufacturer, model, version);
     // 写入全局变量，供状态查询/启动邮件使用
     modemManufacturer = manufacturer;
     modemModel = model;

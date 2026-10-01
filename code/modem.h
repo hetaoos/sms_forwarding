@@ -18,6 +18,10 @@ void ledTick();   // 主循环里调用，推进闪烁状态机并在结束后�
 bool sendSMS(const char* phoneNumber, const char* message);
 // 模组串口是否被占用（发送短信/初始化中），HTTP 处理器据此快速失败
 bool modemBusy();
+// 解析 ATI 响应，提取制造商/型号/固件版本。
+// ML307 系列 ATI 行数不固定（可能仅一行型号，也可能带 "Revision:" 前缀的版本行），
+// 不依赖固定行序，按关键字识别，确保 modemModel 取到真实型号。
+void parseATI(const String& resp, String& manufacturer, String& model, String& version);
 // 信号强度统一查询入口（RSRP/RSRQ/RSSI），所有展示信号的地方都调用它
 bool getModemSignal(SignalInfo& info);
 // 获取本机号码（SIM 卡 MSISDN，AT+CNUM），取不到时返回空串

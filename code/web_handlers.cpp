@@ -185,6 +185,8 @@ void handleRoot() {
   html.replace("%SYSTIME%", timeSynced ? formatSystemTime(sysNow) : String("未同步"));
   html.replace("%SYSTIME_EPOCH%", String(timeSynced ? (unsigned long)sysNow : 0UL));
   html.replace("%TZ_OFFSET%", String(DISPLAY_TZ_OFFSET_HOURS));
+  // 4G 模组型号（modemInit 中解析 ATI 得到，未初始化时为"未知"）
+  html.replace("%MODEM_MODEL%", modemModel.length() > 0 ? modemModel : "未知");
   html.replace("%WEB_USER%", config.webUser);
   html.replace("%WEB_PASS%", config.webPass);
   html.replace("%SMTP_SERVER%", config.smtpServer);
@@ -411,28 +413,12 @@ void handleQuery() {
     
     if (resp.indexOf("OK") >= 0) {
       success = true;
-      // 解析ATI响应
+      // 解析ATI响应（按关键字识别，不依赖固定行序）
       String manufacturer = "未知";
       String model = "未知";
       String version = "未知";
-      
-      // 按行解析
-      int lineStart = 0;
-      int lineNum = 0;
-      for (int i = 0; i < resp.length(); i++) {
-        if (resp.charAt(i) == '\n' || i == resp.length() - 1) {
-          String line = resp.substring(lineStart, i);
-          line.trim();
-          if (line.length() > 0 && line != "ATI" && line != "OK") {
-            lineNum++;
-            if (lineNum == 1) manufacturer = line;
-            else if (lineNum == 2) model = line;
-            else if (lineNum == 3) version = line;
-          }
-          lineStart = i + 1;
-        }
-      }
-      
+      parseATI(resp, manufacturer, model, version);
+
       message = "<table class='info-table'>";
       message += "<tr><td>制造商</td><td>" + manufacturer + "</td></tr>";
       message += "<tr><td>模组型号</td><td>" + model + "</td></tr>";
