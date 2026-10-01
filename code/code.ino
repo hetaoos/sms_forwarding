@@ -45,14 +45,31 @@ void setup() {
     logCaptureLn(String("⚠️ 未配置WiFi，直接进入AP配置模式"));
   }
 
-  // 带超时的等待连接，失败则进入 AP 模式让用户配置
+  // 带超时的等待连接，失败则进入 AP 模式让用户配置。
+  // 部分路由器 DHCP/关联较慢，或开机瞬间射频未稳，偶尔在 20s 内连不上；
+  // 放宽到 30s，且首次等待未连上再主动断开重连一次（总上限约 60s，仍属可接受），
+  // 提高重启后稳定连上的概率。
   unsigned long wifiStart = millis();
-  const unsigned long WIFI_TIMEOUT = 20000; // 20秒超时
-  while (config.wifiSsid.length() > 0 && WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_TIMEOUT) {
+  const unsigned long WIFI_TIMEOUT = 30000; // 30秒超时
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  while (!connected && config.wifiSsid.length() > 0 && millis() - wifiStart < WIFI_TIMEOUT) {
     blink_short(200);
+    connected = (WiFi.status() == WL_CONNECTED);
+  }
+  // 首次等待未连上：断开后重连一次，再给 30s（应对开机射频未稳导致的首次失败）
+  if (!connected && config.wifiSsid.length() > 0) {
+    logCaptureLn(String("WiFi 首次等待未连上，断开重连一次..."));
+    WiFi.disconnect(false);  // 不清空凭据
+    delay(300);
+    WiFi.begin(config.wifiSsid.c_str(), config.wifiPass.c_str());
+    unsigned long wifiStart2 = millis();
+    while (!connected && millis() - wifiStart2 < WIFI_TIMEOUT) {
+      blink_short(200);
+      connected = (WiFi.status() == WL_CONNECTED);
+    }
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (connected) {
     logCaptureLn(String("wifi已连接"));
     logCapture(String("IP地址: "));
     logCaptureLn(WiFi.localIP().toString());
@@ -119,6 +136,14 @@ void loop() {
     ledTick();     // 短信指示灯到时熄灭（非阻塞）
   }
   server.handleClient();
+  // AP 模式下若 STA 后台自动重连成功（如重启后偶发延迟连上），自动退出 AP 模式，
+  // 避免一直卡在「配置 AP」而看似连不上 WiFi。
+  if (apMode && WiFi.status() == WL_CONNECTED) {
+    WiFi.softAPdisconnect(true);
+    apMode = false;
+    ledRestoreNormal();
+    logCaptureLn(String("STA 已连接，自动关闭配置 AP，恢复正常联网"));
+  }
   if (!configValid) {
     if (millis() - lastPrintTime >= 1000) {
       lastPrintTime = millis();

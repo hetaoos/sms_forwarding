@@ -1210,7 +1210,24 @@ void handleWifi() {
   if (action == "scan") {
     // 扫描附近 WiFi（同步扫描，约 2~4 秒）
     logCaptureLn(String("网页端请求扫描WiFi..."));
+    // 先清理上一次残留的扫描状态（否则驱动可能还处于"扫描中"，导致下面直接返回 -2）
+    WiFi.scanDelete();
     int n = WiFi.scanNetworks();
+    // WiFi.scanNetworks() 可能返回负数：WIFI_SCAN_RUNNING(-2)=扫描正在进行、
+    // WIFI_SCAN_FAILED(-1)=扫描失败。通常是驱动里上一次扫描未就绪，稍等后重试一次。
+    if (n < 0) {
+      logCaptureLn(String("首次扫描返回 ") + String(n) + "，稍后重试");
+      delay(500);
+      WiFi.scanDelete();
+      n = WiFi.scanNetworks();
+    }
+    if (n < 0) {
+      logCaptureLn(String("扫描失败，错误码: ") + String(n));
+      server.send(200, "application/json",
+                  "{\"success\":false,\"message\":\"扫描失败(错误码 " + String(n) + ")，请稍后重试\"}");
+      busy = false;
+      return;
+    }
     logCaptureLn(String("扫描到 ") + String(n) + " 个网络");
     String json = "{\"success\":true,\"count\":" + String(n) + ",\"networks\":[";
     for (int i = 0; i < n; i++) {
