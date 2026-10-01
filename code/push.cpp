@@ -363,6 +363,49 @@ static void scanBracket(const String& msg, const char* open, int openLen, const 
   }
 }
 
+// 把短信 PDU 时间戳格式化为可读形式。
+// pdulib 的 getTimeStamp() 返回紧凑串「YYMMDDHHMMSS」+ 两位时区（单位 15 分钟），
+// 例如 "26100123500032" 表示 2026-10-01 23:50:00、时区 32×15 分钟 = UTC+8。
+// 原样透出到邮件/推送里完全看不懂，因此在时间进入通知前统一转成
+// "2026-10-01 23:50:00 (UTC+8)"。
+// 长度不足或含非数字时认为它已是可读串（或异常），原样返回，避免把内容改坏。
+String formatSmsTimestamp(const char* raw) {
+  String s = raw ? String(raw) : String("");
+  s.trim();
+  if (s.length() < 12) return s;
+  for (int i = 0; i < 12; i++) {
+    if (!isdigit((unsigned char)s.charAt(i))) return s;
+  }
+
+  int year  = 2000 + (s.charAt(0) - '0') * 10 + (s.charAt(1) - '0');   // PDU 只带两位年份
+  int mon   = (s.charAt(2) - '0') * 10 + (s.charAt(3) - '0');
+  int day   = (s.charAt(4) - '0') * 10 + (s.charAt(5) - '0');
+  int hour  = (s.charAt(6) - '0') * 10 + (s.charAt(7) - '0');
+  int min   = (s.charAt(8) - '0') * 10 + (s.charAt(9) - '0');
+  int sec   = (s.charAt(10) - '0') * 10 + (s.charAt(11) - '0');
+
+  // 时区：第 13~14 位为 15 分钟的倍数；缺失时按展示时区兜底
+  String tzText;
+  if (s.length() >= 14 && isdigit((unsigned char)s.charAt(12)) && isdigit((unsigned char)s.charAt(13))) {
+    int totalMin = ((s.charAt(12) - '0') * 10 + (s.charAt(13) - '0')) * 15;
+    int tzHour = totalMin / 60;
+    int tzMin  = totalMin % 60;
+    if (tzHour == 0 && tzMin == 0) {
+      tzText = " (UTC)";
+    } else if (tzMin == 0) {
+      tzText = " (UTC+" + String(tzHour) + ")";
+    } else {
+      tzText = " (UTC+" + String(tzHour) + ":" + (tzMin < 10 ? "0" : "") + String(tzMin) + ")";
+    }
+  } else {
+    tzText = " (UTC+" + String(DISPLAY_TZ_OFFSET_HOURS) + ")";
+  }
+
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", year, mon, day, hour, min, sec);
+  return String(buf) + tzText;
+}
+
 // 从短信正文解析发送者名称与验证码
 // 发送者名称：扫描全部【...】/[[...]]/[...]，优先选取最靠近开头或结尾的括号内容；无则空串
 // 验证码：取首个长度 4~6 的连续数字串（等价于"前后不为其他数字"），无则空串
@@ -510,6 +553,11 @@ static String applySmsTemplate(const String& tpl, const char* sender, const char
 NotifyStep sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp,
                          const char* senderName, const char* verifyCode, int maxAttempts) {
   if (!channel.enabled) return STEP_OK;   // 未启用：直接算作这一步完成
+
+  // 时间戳统一格式化（PDU 紧凑串 → 可读形式），已是格式化结果时原样返回。
+  // 放在这里兜底：无论调用方传进来的是原始 PDU 时间戳还是已处理过的，推送出去的都是可读串。
+  String tsFormatted = formatSmsTimestamp(timestamp);
+  timestamp = tsFormatted.c_str();
 
   // 对于某些推送方式，URL可以为空（使用默认URL）
   bool needUrl = (channel.type == PUSH_TYPE_POST_JSON || channel.type == PUSH_TYPE_BARK ||
@@ -1006,6 +1054,8 @@ static void buildSmsMail(const char* sender, const char* message, const char* ti
                         String& subject, String& html) {
   String senderName, verifyCode;
   parseSmsMeta(String(message), senderName, verifyCode);
+  // 兜底再格式化一次：Mailgun 等通道也会调这里，确保邮件里的时间一定是可读串
+  String tsFormatted = formatSmsTimestamp(timestamp);
 
   // 标题（验证码优先，参考 send_notification.sh）
   if (verifyCode.length() > 0) {
@@ -1033,7 +1083,7 @@ static void buildSmsMail(const char* sender, const char* message, const char* ti
   inner += "<tr><td style=\"padding:8px 0;width:64px;color:#888;vertical-align:top;\">发件人</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(sender));
   if (senderName.length() > 0) inner += " <span style=\"color:#2f6fed;\">(" + htmlEscape(senderName) + ")</span>";
   inner += "</td></tr>";
-  inner += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(timestamp)) + "</td></tr>";
+  inner += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(tsFormatted) + "</td></tr>";
   inner += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">内容</td><td style=\"padding:8px 0;word-break:break-word;\">" + htmlEscape(String(message)) + "</td></tr>";
   inner += "</table></div>";
 

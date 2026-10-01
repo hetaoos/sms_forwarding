@@ -275,9 +275,12 @@ void processAdminCommand(const char* sender, const char* text) {
 // 处理最终的短信内容（管理员命令检查和转发）
 void processSmsContent(const char* sender, const char* text, const char* timestamp) {
   ledBlink();   // 收到短信闪两下（非阻塞，由 loop() 的 ledTick() 推进）
+  // PDU 时间戳是紧凑串（如 "26100123500032"），这里统一转成可读形式，
+  // 后面入队的所有推送通道与邮件都用同一个格式化结果
+  String ts = formatSmsTimestamp(timestamp);
   logCaptureLn(String("=== 处理短信内容 ==="));
   logCaptureLn(String("发送者: " + String(sender)));
-  logCaptureLn(String("时间戳: " + String(timestamp)));
+  logCaptureLn(String("时间戳: " + ts));
   logCaptureLn(String("内容: " + String(text)));
   logCaptureLn(String("===================="));
 
@@ -304,7 +307,7 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   // 推送与邮件都是网络慢操作（单条最坏可达数十秒），这里只入队、立即返回，
   // 真正的发送由 loop() 里的 processNotifyQueue() 分片推进；
   // 邮件标题/HTML 正文（含验证码、发件人名称）在发送阶段由 push.cpp 构建。
-  if (!notifyQueueSms(sender, text, timestamp)) {
+  if (!notifyQueueSms(sender, text, ts.c_str())) {
     logCaptureLn(String("⚠️ 本次短信未进入通知队列（队列已满或未配置任何出口）"));
   }
 }
