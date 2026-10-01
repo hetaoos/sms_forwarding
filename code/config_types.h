@@ -120,6 +120,11 @@ enum SimStatus {
 // 展示时区偏移（小时）：系统内部统一保存 UTC 时间戳，展示时加该偏移（默认北京时间 UTC+8）
 #define DISPLAY_TZ_OFFSET_HOURS 8
 
+// 固件版本标识＝编译时间，取自编译器内置宏（无需任何构建脚本或外部传参，IDE 与 arduino-cli 通用）。
+// 用于串口/Web 日志与启动邮件里确认设备当前跑的是哪一版固件。
+// 注意：增量编译时只有被重新编译的文件才会更新它，核对版本前建议清理构建目录重新编译。
+#define FW_BUILD_STAMP __DATE__ " " __TIME__
+
 // ---- 板载蓝色 LED 指示 ----
 // LED 为低电平点亮。启动/初始化完成后保持熄灭，只在收到短信时闪烁。
 #define SMS_LED_BLINK_TIMES 2  // 收到短信时闪烁的次数

@@ -151,9 +151,10 @@ void sendStartupEmail() {
   String netStatus  = modemReady ? "已注册网络" : "未注册（无SIM卡或信号差）";
 
   // 模组信息（全局变量，由 modemInit 解析 ATI 写入）
+  // 注意：不再展示模组固件版本——这批 4G 模组没有可靠的固件版本查询命令（ATI 只有厂商/型号），
+  // 展示出来的值要么恒为「未知」要么是误取到的型号串，反而误导。
   String manufacturer = modemManufacturer;
   String model = modemModel;
-  String version = modemVersion;
 
   // 信号
   SignalInfo sig;
@@ -188,17 +189,19 @@ void sendStartupEmail() {
   inner += "<div style=\"padding:16px 20px 4px;\">";
   inner += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📡 设备信息</div>";
   inner += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  // 按「标识 → 型号/固件 → 网络 → 配置」排列，与网页概览的「📡 设备信息」顺序保持一致
   inner += buildMailRow("设备地址", deviceUrl);
   inner += buildMailRow("IP地址", ip);
   inner += buildMailRow("MAC地址", WiFi.macAddress());
+  inner += buildMailRow("芯片型号", getChipModelName());
+  inner += buildMailRow("固件版本", String(FW_BUILD_STAMP));
   inner += buildMailRow("WiFi信号", String(wifiRssi) + " dBm");
   inner += buildMailRow("推送通道", channelSummary);
   inner += "</table></div>";
 
   // 模组信息 / 信号状态 / 号码信息
   inner += mailSection("🔧 模组信息", buildMailRow("制造商", manufacturer) +
-                                     buildMailRow("型号", model) +
-                                     buildMailRow("固件版本", version));
+                                     buildMailRow("型号", model));
   inner += mailSection("📶 信号状态", buildMailRow("评级", sigQuality) +
                                      buildMailRow("RSRP", rsrpStr) +
                                      buildMailRow("RSRQ", rsrqStr) +

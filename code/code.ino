@@ -26,6 +26,8 @@ void setup() {
   initConcatBuffer();
   loadConfig();
   configValid = isConfigValid();
+  // 编译时间＝固件版本标识，用于在日志/启动邮件里确认设备当前跑的是哪一版固件
+  logCaptureLn(String("固件编译时间: ") + String(FW_BUILD_STAMP));
 
   // ---- WiFi 连接优化 ----
   // 已通过 NVS 加载配置，使用配置中的 WiFi 凭据（缺省为 DEFAULT_WIFI_*）

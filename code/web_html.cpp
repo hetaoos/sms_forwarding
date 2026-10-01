@@ -245,6 +245,7 @@ const char* htmlPage = R"rawliteral(
           <div class="overview-grid">
             <div class="overview-item"><div class="label">Device IP</div><div class="value" id="ovIp">%IP%</div></div>
             <div class="overview-item"><div class="label">WiFi SSID</div><div class="value" id="ovSsid">%WIFI_SSID%</div></div>
+            <div class="overview-item"><div class="label">芯片型号</div><div class="value" id="ovChipModel">%CHIP_MODEL%</div></div>
             <div class="overview-item"><div class="label">4G 模块</div><div class="value" id="ovModemModel">%MODEM_MODEL%</div></div>
             <div class="overview-item"><div class="label">系统时间</div><div class="value" id="ovTime" data-epoch="%SYSTIME_EPOCH%" data-offset="%TZ_OFFSET%">%SYSTIME%</div></div>
             <div class="overview-item"><div class="label">Uptime</div><div class="value" id="ovUptime">%UPTIME%</div></div>

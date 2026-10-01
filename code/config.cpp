@@ -140,6 +140,17 @@ String getDeviceUrl() {
   return "http://" + WiFi.localIP().toString() + "/";
 }
 
+// 开发板芯片类型（如 "ESP32-C3"）：概览页与启动邮件共用同一处的取值逻辑。
+// 只用运行时系统 API，不依赖任何编译期宏、也不需要额外的编译参数：
+// ESP.getChipModel() 内部走 IDF 的 esp_chip_info()（ESP32 经典款则读 eFuse 封装型号）。
+// 注：Arduino 的板型名（如 FQBN 里的 makergo_c3_supermini）只存在于编译期，
+// 运行时没有任何系统 API 能取到，因此这里不展示板名。
+String getChipModelName() {
+  String m = String(ESP.getChipModel());
+  if (m.length() == 0 || m == "UNKNOWN" || m == "Unknown") m = "未知";
+  return m;
+}
+
 // 获取当前设备 IP（AP 模式下返回配置热点 IP，否则返回 STA IP）
 // 取不到本机号码时，通知邮件用它作为设备标识
 String getDeviceIp() {

@@ -233,6 +233,8 @@ void handleRoot() {
   html.replace("%TZ_OFFSET%", String(DISPLAY_TZ_OFFSET_HOURS));
   // 4G 模组型号（modemInit 中解析 ATI 得到，未初始化时为"未知"）
   html.replace("%MODEM_MODEL%", modemModel.length() > 0 ? modemModel : "未知");
+  // 开发板芯片型号（如 ESP32-C3）
+  html.replace("%CHIP_MODEL%", getChipModelName());
   html.replace("%WEB_USER%", config.webUser);
   html.replace("%WEB_PASS%", config.webPass);
   html.replace("%SMTP_SERVER%", config.smtpServer);
