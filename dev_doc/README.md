@@ -10,9 +10,9 @@
 |---|---|
 | MCU | ESP32-C3 (MakerGO SuperMini) |
 | 4G 模组 | 通过 UART 连接，AT 指令控制 |
-| 模组 EN 引脚 | GPIO 5（ESP32-C3）/ GPIO 4（ESP32-WROOM-32） |
-| 模组 TXD/RXD | GPIO 3 / 4（ESP32-C3）/ GPIO 17 / 16（ESP32-WROOM-32） |
-| LED | GPIO 8（ESP32-C3 内置）/ GPIO 2（ESP32-WROOM-32） |
+| 模组 EN 引脚 | GPIO 5（ESP32-C3）/ GPIO 4（ESP32-WROOM-32、ESP32-S3） |
+| 模组 TXD/RXD | GPIO 3 / 4（ESP32-C3）/ GPIO 17 / 16（ESP32-WROOM-32、ESP32-S3） |
+| LED | GPIO 8（ESP32-C3 内置）/ GPIO 2（ESP32-WROOM-32、ESP32-S3） |
 | 串口波特率 | USB: 115200, 模组: 115200 |
 
 ## 第三方依赖库

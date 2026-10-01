@@ -150,14 +150,16 @@ ESP32C3 与 ML307R-DC 通过串口（UART）连接，接线如下：
 
 > 引脚对照（固件自动适配，`code/globals.h` 中按 `CONFIG_IDF_TARGET_*` 条件编译）：
 >
-> | 信号 | ESP32-C3 | ESP32-WROOM-32 |
-> |---|---|---|
-> | 模组 TX（MCU 发） | GPIO3 | GPIO17 |
-> | 模组 RX（MCU 收） | GPIO4 | GPIO16 |
-> | 模组 EN | GPIO5 | GPIO4 |
-> | LED | GPIO8 | GPIO2 |
+> | 信号 | ESP32-C3 | ESP32-WROOM-32 | ESP32-S3 |
+> |---|---|---|---|
+> | 模组 TX（MCU 发） | GPIO3 | GPIO17 | GPIO17 |
+> | 模组 RX（MCU 收） | GPIO4 | GPIO16 | GPIO16 |
+> | 模组 EN | GPIO5 | GPIO4 | GPIO4 |
+> | LED | GPIO8 | GPIO2 | GPIO2 |
 >
-> 注意：ESP32-WROOM-32 上模组 EN 接 GPIO4（属上电 strapping 脚），建议在 EN 与 3.3V 之间加 10kΩ 上拉，确保上电瞬间模组处于运行态；若模组不启动，可微调 `modemPowerCycle()` 的断电/上电时序。
+> ESP32-S3 与经典 ESP32 接线完全相同（串口交叉、EN 控制模组电源），编译时板型选 `esp32:esp32:esp32s3` 即可。注意：ESP32-S3 开发板的板载 LED 引脚差异较大（常见 GPIO2 / GPIO21 / GPIO48），若与默认 GPIO2 不符，请用 `#define LED_BUILTIN x` 覆盖（`globals.h` 已有 `#ifndef` 保护）。
+>
+> 注意：ESP32-WROOM-32 / ESP32-S3 上模组 EN 接 GPIO4（属上电 strapping 脚），建议在 EN 与 3.3V 之间加 10kΩ 上拉，确保上电瞬间模组处于运行态；若模组不启动，可微调 `modemPowerCycle()` 的断电/上电时序。
 
 可通过USB连接ESP32C3进行编程和供电，正常工作时，可通过网页与模组进行AT通信，方便调试。
 

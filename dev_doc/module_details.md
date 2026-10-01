@@ -214,10 +214,10 @@ ESP32-C3                   4G 模组
   GPIO 5     ──────────── EN 引脚
 ```
 
-ESP32-WROOM-32（经典 ESP32，板型选 `esp32:esp32:esp32`）：
+ESP32-WROOM-32 / ESP32-S3（经典 ESP32 与 S3，板型选 `esp32:esp32:esp32` / `esp32:esp32:esp32s3`）：
 
 ```
-ESP32-WROOM-32             4G 模组
+ESP32-WROOM-32 / S3        4G 模组
   GPIO 17 (TX1) ───────────► RX (AT端口)
   GPIO 16 (RX1) ◄─────────── TX (AT端口)
   GPIO 4  (EN)  ───────────► EN 引脚

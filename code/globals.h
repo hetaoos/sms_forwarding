@@ -12,7 +12,7 @@
 #include <ReadyMail.h>
 #include "config_types.h"
 
-// 串口/控制引脚映射（按芯片自动选择：ESP32-C3 与 经典 ESP32/WROOM-32 条件编译）
+// 串口/控制引脚映射（按芯片自动选择：ESP32-C3 / ESP32-S3 / 经典 ESP32/WROOM-32 条件编译）
 // arduino-esp32 3.x 在编译期自动定义 CONFIG_IDF_TARGET_*，据此切换引脚，无需手动改。
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
   // ESP32-C3 系列（如 MakerGO C3 SuperMini、各类 C3-WROOM 开发板）
@@ -20,6 +20,13 @@
   #define RXD 4
   #define MODEM_EN_PIN 5
   #define DEFAULT_LED_BUILTIN 8
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+  // ESP32-S3 系列（Xtensa 双核）。需避开：Flash/PSRAM 脚(26-32/33)、strapping 脚
+  // (GPIO0/3/45/46) 及仅输出脚(GPIO33-37 部分)、仅输入脚(部分高编号)。GPIO17/16/4 为通用安全脚。
+  #define TXD 17
+  #define RXD 16
+  #define MODEM_EN_PIN 4
+  #define DEFAULT_LED_BUILTIN 2
 #elif defined(CONFIG_IDF_TARGET_ESP32)
   // 经典 ESP32 / ESP32-WROOM-32（Xtensa）。需避开：Flash 脚(6/7/8/9/10/11)、
   // 仅输入脚(34-39)、以及易造成启动冲突的 strapping 脚(GPIO0/2/5/12 谨慎)。
