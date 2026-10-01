@@ -250,6 +250,7 @@ const char* htmlPage = R"rawliteral(
             <div class="overview-item"><div class="label">Uptime</div><div class="value" id="ovUptime">%UPTIME%</div></div>
             <div class="overview-item"><div class="label">Free Heap</div><div class="value" id="ovHeap">%FREE_HEAP%</div></div>
             <div class="overview-item"><div class="label">芯片温度</div><div class="value" id="ovTemp">%CHIP_TEMP%</div></div>
+            <div class="overview-item"><div class="label">CPU 占用</div><div class="value" id="ovCpu">%CPU_USAGE%</div></div>
           </div>
         </div>
       </div>

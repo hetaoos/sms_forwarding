@@ -6,6 +6,8 @@
 #include "wifi_config.h"
 #include "wifi_manager.h"
 #include "driver/temperature_sensor.h"  // ESP32-C3 片内温度传感器（ESP-IDF 驱动）
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"  // uxTaskGetSystemState：用于统计 IDLE 任务占比推算 CPU 占用
 
 // ---- 日志环形缓冲区 ----
 String logBuffer[LOG_BUF_SIZE];
@@ -44,6 +46,36 @@ static String getChipTemperature() {
   temperature_sensor_get_celsius(tsHandle, &temp);
   temperature_sensor_disable(tsHandle);
   return String(temp, 1) + " °C";
+}
+
+// 读取 CPU 占用率（全系统，含 WiFi/网络等任务）。
+// 借助 FreeRTOS 任务运行时间统计，用 IDLE 任务占比反推：CPU% = 100 − IDLE%。
+// 需连续两次采样算差值，首次调用返回"采样中…"，之后每次刷新给出真实值。
+static String getCpuUsage() {
+  static unsigned long prevIdle = 0;
+  static unsigned long prevTotal = 0;
+  static bool primed = false;
+  TaskStatus_t tasks[20];
+  uint32_t n = uxTaskGetSystemState(tasks, 20, nullptr);
+  if (n == 0) return String("不可用");
+  unsigned long idle = 0, total = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    total += tasks[i].ulRunTimeCounter;
+    if (strstr(tasks[i].pcTaskName, "IDLE") != NULL) idle = tasks[i].ulRunTimeCounter;
+  }
+  if (!primed || total <= prevTotal) {
+    prevIdle = idle;
+    prevTotal = total;
+    primed = true;
+    return String("采样中…");
+  }
+  float idlePct = (float)(idle - prevIdle) / (float)(total - prevTotal) * 100.0f;
+  prevIdle = idle;
+  prevTotal = total;
+  float usage = 100.0f - idlePct;
+  if (usage < 0) usage = 0;
+  if (usage > 100) usage = 100;
+  return String(usage, 1) + " %";
 }
 
 void logCapture(const String& msg) {
@@ -198,6 +230,7 @@ void handleRoot() {
   html.replace("%AP_PASS%", strlen(AP_PASS) >= 8 ? String(AP_PASS) : "(开放网络，无需密码)");
   html.replace("%FREE_HEAP%", String(ESP.getFreeHeap() / 1024) + " KB");
   html.replace("%CHIP_TEMP%", getChipTemperature());
+  html.replace("%CPU_USAGE%", getCpuUsage());
   long uptimeSec = millis() / 1000;
   char uptimeBuf[16];
   snprintf(uptimeBuf, sizeof(uptimeBuf), "%ld:%02ld:%02ld", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
