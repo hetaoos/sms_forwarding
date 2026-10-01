@@ -5,6 +5,7 @@
 #include "push.h"
 #include "wifi_config.h"
 #include "wifi_manager.h"
+#include "driver/temperature_sensor.h"  // ESP32-C3 片内温度传感器（ESP-IDF 驱动）
 
 // ---- 日志环形缓冲区 ----
 String logBuffer[LOG_BUF_SIZE];
@@ -23,6 +24,26 @@ static void _logCommit() {
     _logAppend(_logLine);
     _logLine = "";
   }
+}
+
+// 读取 ESP32-C3 片内温度（摄氏度），返回形如 "42.3 °C" 的字符串；不可用时返回 "不可用"。
+// 温度传感器仅安装一次（static 句柄），每次读取时使能→取值→关闭，读数本身很快、无网络阻塞。
+static String getChipTemperature() {
+  static bool tsInited = false;
+  static temperature_sensor_handle_t tsHandle = NULL;
+  if (!tsInited) {
+    temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
+    if (temperature_sensor_install(&cfg, &tsHandle) != ESP_OK) {
+      tsHandle = NULL;
+    }
+    tsInited = true;
+  }
+  if (tsHandle == NULL) return String("不可用");
+  if (temperature_sensor_enable(tsHandle) != ESP_OK) return String("不可用");
+  float temp = 0;
+  temperature_sensor_get_celsius(tsHandle, &temp);
+  temperature_sensor_disable(tsHandle);
+  return String(temp, 1) + " °C";
 }
 
 void logCapture(const String& msg) {
@@ -176,6 +197,7 @@ void handleRoot() {
   // 配置 AP 密码提示：AP_PASS 长度 >= 8 为密码，否则开放网络
   html.replace("%AP_PASS%", strlen(AP_PASS) >= 8 ? String(AP_PASS) : "(开放网络，无需密码)");
   html.replace("%FREE_HEAP%", String(ESP.getFreeHeap() / 1024) + " KB");
+  html.replace("%CHIP_TEMP%", getChipTemperature());
   long uptimeSec = millis() / 1000;
   char uptimeBuf[16];
   snprintf(uptimeBuf, sizeof(uptimeBuf), "%ld:%02ld:%02ld", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);

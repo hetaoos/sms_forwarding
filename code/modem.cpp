@@ -353,6 +353,38 @@ void ledTick() {
   ledPhaseEnd = millis() + ledPhaseMs;
 }
 
+// ---- AP 模式：蓝灯慢闪（约 1 秒周期）表示「等待配置」 ----
+// 与短信闪烁/模组不可用共用同一物理引脚，但用独立状态机，避免互相干扰。
+static bool apLedOn = false;
+static unsigned long apLedNext = 0;
+
+void ledApEnter() {
+  // 进入 AP 模式：先清零短信闪烁状态，再熄灭，等第一个周期再亮，避免一进 AP 就常亮
+  ledPhasesLeft = 0;
+  ledPhaseEnd = 0;
+  apLedOn = false;
+  apLedNext = 0;
+  digitalWrite(LED_BUILTIN, HIGH);  // 先熄灭
+}
+
+void ledApTick() {
+  if ((long)(millis() - apLedNext) < 0) return;
+  apLedOn = !apLedOn;
+  digitalWrite(LED_BUILTIN, apLedOn ? LOW : HIGH);  // LOW=亮
+  apLedNext = millis() + 500;  // 亮 500ms + 灭 500ms ≈ 1 秒周期
+}
+
+void ledRestoreNormal() {
+  // 离开 AP 模式：恢复常态。模组/SIM 不可用时保持常亮（与平时一致），否则熄灭。
+  ledPhasesLeft = 0;
+  ledPhaseEnd = 0;
+  if (!modemReady || !isSimInserted()) {
+    digitalWrite(LED_BUILTIN, LOW);
+  } else {
+    digitalWrite(LED_BUILTIN, HIGH);
+  }
+}
+
 bool sendATandWaitOK(const char* cmd, unsigned long timeout) {
   while (Serial1.available()) Serial1.read();
   Serial1.println(cmd);

@@ -113,7 +113,11 @@ void setup() {
 }
 
 void loop() {
-  ledTick();   // 短信指示灯到时熄灭（非阻塞）
+  if (apMode) {
+    ledApTick();   // AP 模式：蓝灯慢闪（约 1 秒周期）表示「等待配置」
+  } else {
+    ledTick();     // 短信指示灯到时熄灭（非阻塞）
+  }
   server.handleClient();
   if (!configValid) {
     if (millis() - lastPrintTime >= 1000) {

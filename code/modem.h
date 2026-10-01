@@ -15,6 +15,10 @@ void blink_short(unsigned long gap_time = 500);
 void ledOff();
 void ledBlink(unsigned int times = SMS_LED_BLINK_TIMES, unsigned long duration = SMS_LED_BLINK_MS);
 void ledTick();   // 主循环里调用，推进闪烁状态机并在结束后熄灭
+// ---- AP 模式 LED 指示（低电平点亮）----
+void ledApEnter();      // 进入 AP 模式：清零短信闪烁状态，交慢闪接管
+void ledApTick();       // 主循环 AP 模式下调用：蓝灯慢闪（约 1 秒周期）表示「等待配置」
+void ledRestoreNormal(); // 离开 AP 模式：恢复常态 LED（模组/SIM 不可用常亮，否则熄灭）
 bool sendSMS(const char* phoneNumber, const char* message);
 // 模组串口是否被占用（发送短信/初始化中），HTTP 处理器据此快速失败
 bool modemBusy();

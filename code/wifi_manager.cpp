@@ -2,6 +2,7 @@
 #include "web_handlers.h"
 #include "config.h"
 #include "wifi_config.h"
+#include "modem.h"  // LED 指示：ledApEnter / ledRestoreNormal
 
 // 启动配置 AP：WiFi 连接失败时让用户的手机/电脑能连上来配置 WiFi。
 // 使用 WIFI_AP_STA，这样即使处于 AP 模式，STA 也可以在后台尝试连接。
@@ -16,6 +17,7 @@ void startAPMode() {
     logCaptureLn(String("已启动配置AP热点: ") + String(AP_SSID) + " (开放网络，无密码)");
   }
   apMode = true;
+  ledApEnter();  // 进入 AP 模式：蓝灯改慢闪表示「等待配置」
   logCapture(String("AP地址: "));
   logCaptureLn(WiFi.softAPIP().toString());
   logCaptureLn(String("请用手机/电脑连接该热点，再访问 http://") +
@@ -46,6 +48,7 @@ bool connectWiFiAndSettle(const String& ssid, const String& pass, unsigned long 
       // 连接成功，关闭配置 AP（保留 STA 接口）
       WiFi.softAPdisconnect(true);
       apMode = false;
+      ledRestoreNormal();  // 离开 AP 模式：恢复常态 LED（不可用常亮/正常熄灭）
       logCaptureLn(String("配置AP已关闭，设备恢复正常联网"));
     }
     return true;

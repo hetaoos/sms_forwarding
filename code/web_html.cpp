@@ -249,6 +249,7 @@ const char* htmlPage = R"rawliteral(
             <div class="overview-item"><div class="label">系统时间</div><div class="value" id="ovTime" data-epoch="%SYSTIME_EPOCH%" data-offset="%TZ_OFFSET%">%SYSTIME%</div></div>
             <div class="overview-item"><div class="label">Uptime</div><div class="value" id="ovUptime">%UPTIME%</div></div>
             <div class="overview-item"><div class="label">Free Heap</div><div class="value" id="ovHeap">%FREE_HEAP%</div></div>
+            <div class="overview-item"><div class="label">芯片温度</div><div class="value" id="ovTemp">%CHIP_TEMP%</div></div>
           </div>
         </div>
       </div>
