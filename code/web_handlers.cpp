@@ -5,7 +5,6 @@
 #include "push.h"
 #include "wifi_config.h"
 #include "wifi_manager.h"
-#include "driver/temperature_sensor.h"  // ESP32-C3 片内温度传感器（ESP-IDF 驱动）
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"  // uxTaskGetSystemState：用于统计 IDLE 任务占比推算 CPU 占用
 
@@ -28,28 +27,20 @@ static void _logCommit() {
   }
 }
 
-// 读取 ESP32-C3 片内温度（摄氏度），返回形如 "42.3 °C" 的字符串；不可用时返回 "不可用"。
-// 温度传感器仅安装一次（static 句柄），每次读取时使能→取值→关闭，读数本身很快、无网络阻塞。
+// 读取片内温度（摄氏度），返回形如 "42.3 °C" 的字符串；不可用时返回 "不可用"。
+// 统一使用 arduino-esp32 的 temperatureRead()：内部按芯片自动适配——
+// 经典 ESP32 走 ROM 的 temprature_sens_read()，C3/C6/S2/S3 等走 ESP-IDF temperature_sensor driver。
+// 读数很快（经典 ESP32 直接读 ROM；其余芯片首次安装句柄后直接取值），无网络阻塞。
 static String getChipTemperature() {
-  static bool tsInited = false;
-  static temperature_sensor_handle_t tsHandle = NULL;
-  if (!tsInited) {
-    temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
-    if (temperature_sensor_install(&cfg, &tsHandle) != ESP_OK) {
-      tsHandle = NULL;
-    }
-    tsInited = true;
-  }
-  if (tsHandle == NULL) return String("不可用");
-  if (temperature_sensor_enable(tsHandle) != ESP_OK) return String("不可用");
-  float temp = 0;
-  temperature_sensor_get_celsius(tsHandle, &temp);
-  temperature_sensor_disable(tsHandle);
+  float temp = temperatureRead();
+  if (temp != temp) return String("不可用");  // NaN：传感器不可用
   return String(temp, 1) + " °C";
 }
 
 // 读取 CPU 占用率（全系统，含 WiFi/网络等任务）。
 // 借助 FreeRTOS 任务运行时间统计，用 IDLE 任务占比反推：CPU% = 100 − IDLE%。
+// 双核芯片（如经典 ESP32）含两个 IDLE 任务（IDLE0/IDLE1），需累加所有 IDLE 运行时间，
+// 再除以两核任务总时间，才得到整体平均占用率；单核（如 ESP32-C3）只有一个 IDLE，+= 等价 =。
 // 需连续两次采样算差值，首次调用返回"采样中…"，之后每次刷新给出真实值。
 static String getCpuUsage() {
   static unsigned long prevIdle = 0;
@@ -61,7 +52,7 @@ static String getCpuUsage() {
   unsigned long idle = 0, total = 0;
   for (uint32_t i = 0; i < n; i++) {
     total += tasks[i].ulRunTimeCounter;
-    if (strstr(tasks[i].pcTaskName, "IDLE") != NULL) idle = tasks[i].ulRunTimeCounter;
+    if (strstr(tasks[i].pcTaskName, "IDLE") != NULL) idle += tasks[i].ulRunTimeCounter;
   }
   if (!primed || total <= prevTotal) {
     prevIdle = idle;

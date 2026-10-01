@@ -206,11 +206,24 @@ Namespace: "sms_config"
 
 ### 串口通信模型
 
+ESP32-C3（默认）：
+
 ```
 ESP32-C3                   4G 模组
   Serial1 (UART) ──────────── AT 端口
   GPIO 5     ──────────── EN 引脚
 ```
+
+ESP32-WROOM-32（经典 ESP32，板型选 `esp32:esp32:esp32`）：
+
+```
+ESP32-WROOM-32             4G 模组
+  GPIO 17 (TX1) ───────────► RX (AT端口)
+  GPIO 16 (RX1) ◄─────────── TX (AT端口)
+  GPIO 4  (EN)  ───────────► EN 引脚
+```
+
+引脚由 `globals.h` 中 `CONFIG_IDF_TARGET_*` 条件编译自动选择，切换板型无需改代码。
 
 ### AT 指令函数对比
 

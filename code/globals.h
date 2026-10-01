@@ -12,14 +12,32 @@
 #include <ReadyMail.h>
 #include "config_types.h"
 
-// 串口映射
-#define TXD 3
-#define RXD 4
-#define MODEM_EN_PIN 5
+// 串口/控制引脚映射（按芯片自动选择：ESP32-C3 与 经典 ESP32/WROOM-32 条件编译）
+// arduino-esp32 3.x 在编译期自动定义 CONFIG_IDF_TARGET_*，据此切换引脚，无需手动改。
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  // ESP32-C3 系列（如 MakerGO C3 SuperMini、各类 C3-WROOM 开发板）
+  #define TXD 3
+  #define RXD 4
+  #define MODEM_EN_PIN 5
+  #define DEFAULT_LED_BUILTIN 8
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+  // 经典 ESP32 / ESP32-WROOM-32（Xtensa）。需避开：Flash 脚(6/7/8/9/10/11)、
+  // 仅输入脚(34-39)、以及易造成启动冲突的 strapping 脚(GPIO0/2/5/12 谨慎)。
+  #define TXD 17
+  #define RXD 16
+  #define MODEM_EN_PIN 4
+  #define DEFAULT_LED_BUILTIN 2
+#else
+  // 未知目标回退到 C3 配置
+  #define TXD 3
+  #define RXD 4
+  #define MODEM_EN_PIN 5
+  #define DEFAULT_LED_BUILTIN 8
+#endif
 
 // LED引脚定义（用于通过CI验证，给个假的）
 #ifndef LED_BUILTIN
-#define LED_BUILTIN 8
+#define LED_BUILTIN DEFAULT_LED_BUILTIN
 #endif
 
 #define SERIAL_BUFFER_SIZE 1024      // 串口单行缓冲（必须大于一条 +CMT URC 的长度）
