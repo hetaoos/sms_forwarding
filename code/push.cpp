@@ -147,12 +147,7 @@ void sendStartupEmail() {
 
   String timeStr;
   if (timeSynced) {
-    time_t now = time(nullptr);
-    struct tm* t = gmtime(&now);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d UTC",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
-    timeStr = buf;
+    timeStr = formatSystemTime(time(nullptr));
   } else {
     timeStr = "未同步（使用设备时间）";
   }
