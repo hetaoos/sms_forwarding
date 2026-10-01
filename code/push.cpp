@@ -9,6 +9,42 @@
 #include <base64.h>
 #include <sys/time.h>
 
+// ---- 邮件 HTML 统一样式表（class 版）----
+// 之前每个 <div>/<td> 都内联同一串 CSS，正文里大量重复；这里改为集中定义一次，
+// 各构建函数只输出 class，体积更小、改风格只需动这一处。
+// 兼容性说明（这是本次改用 class 的代价，需以实际收到的邮件为准）：
+//   - Gmail 网页/iOS、Apple Mail、多数手机原生客户端：支持 <style> + class
+//   - Outlook 桌面版（Word 排版引擎）：认 class，但不支持渐变等部分属性（标题栏会退化成纯色）
+//   - 少数客户端会剥掉 <style>：此时正文退化为无样式表格（仍可读）
+// 因此仅把「动态值」（卡片最大宽度、状态徽标配色）以内联方式保留。
+static const char MAIL_CSS[] =
+  ".mw{background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif}"
+  ".card{margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden}"
+  ".hd{background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px}"
+  ".hd span{font-size:17px;font-weight:600}"
+  ".blk{padding:16px 20px 4px}"                     /* 带小标题的区块 */
+  ".sub{padding:0 20px 4px}"                        /* 次级分组（模组信息/信号/号码） */
+  ".rows{padding:16px 20px}"                        /* 只有表格的区块 */
+  ".cap{font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px}"
+  ".tb{width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5}"
+  ".k{padding:8px 0;width:96px;color:#888;vertical-align:top;white-space:nowrap}"
+  ".v{padding:8px 0;border-bottom:1px solid #f0f0f0;word-break:break-all}"
+  ".kn{padding:8px 0;width:64px;color:#888;vertical-align:top}"
+  ".vn{padding:8px 0;border-bottom:1px solid #f0f0f0}"
+  ".vl{padding:8px 0;word-break:break-word}"
+  ".info{padding:12px 20px 0;border-top:1px solid #f0f0f0;margin-top:12px}"
+  ".info .tb{font-size:13px;color:#666}"
+  ".ft{padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;margin-top:12px}"
+  ".badge{margin:16px 20px 0;border-radius:8px;padding:12px 16px}"
+  ".b1{font-size:14px;font-weight:600}"
+  ".b2{font-size:13px;color:#666}"
+  ".note{padding:16px 20px;font-size:14px;color:#333;line-height:1.6}"
+  ".kbd{background:#f4f6f8;padding:2px 6px;border-radius:4px}"
+  ".code{margin:16px 20px 0;background:#fff4f4;border:1px solid #ffd0d0;border-radius:8px;padding:12px 16px;text-align:center}"
+  ".code1{font-size:12px;color:#c0392b;letter-spacing:2px}"
+  ".code2{font-size:28px;font-weight:700;color:#d00;letter-spacing:5px;margin-top:2px}"
+  ".hl{color:#2f6fed}";
+
 // 邮件配置是否完整
 static bool emailConfigured() {
   return config.smtpServer.length() > 0 && config.smtpUser.length() > 0 &&
@@ -118,9 +154,8 @@ void sendEmailNotification(const char* subject, const char* body, MailBodyType b
 
 // 带小标题的表格块（启动邮件各分组使用）
 static String mailSection(const String& caption, const String& rows) {
-  return "<div style=\"padding:0 20px 4px;\">"
-         "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">" + htmlEscape(caption) + "</div>"
-         "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">" + rows + "</table></div>";
+  return "<div class=\"sub\"><div class=\"cap\">" + htmlEscape(caption) + "</div>"
+         "<table class=\"tb\">" + rows + "</table></div>";
 }
 
 // 发送"设备已启动"通知邮件：在模组初始化完成后调用，
@@ -180,15 +215,14 @@ void sendStartupEmail() {
   String badgeBg = modemReady ? "#e6f7ec" : "#fff4e6";
   String badgeBorder = modemReady ? "#bfe9cd" : "#ffd9a8";
   String badgeColor = modemReady ? "#1a8a4a" : "#c97a00";
-  String inner = "<div style=\"margin:16px 20px 0;background:" + badgeBg + ";border:1px solid " + badgeBorder + ";border-radius:8px;padding:12px 16px;\">";
-  inner += "<span style=\"font-size:14px;font-weight:600;color:" + badgeColor + ";\">" + htmlEscape(initStatus) + "</span>";
-  inner += " <span style=\"font-size:13px;color:#666;\">" + htmlEscape(netStatus) + "</span>";
+  // 徽标配色是动态值（就绪/未就绪），仍用内联
+  String inner = "<div class=\"badge\" style=\"background:" + badgeBg + ";border:1px solid " + badgeBorder + ";\">";
+  inner += "<span class=\"b1\" style=\"color:" + badgeColor + ";\">" + htmlEscape(initStatus) + "</span>";
+  inner += " <span class=\"b2\">" + htmlEscape(netStatus) + "</span>";
   inner += "</div>";
 
   // 设备信息
-  inner += "<div style=\"padding:16px 20px 4px;\">";
-  inner += "<div style=\"font-size:13px;font-weight:600;color:#2f6fed;margin-bottom:6px;\">📡 设备信息</div>";
-  inner += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
+  inner += "<div class=\"blk\"><div class=\"cap\">📡 设备信息</div><table class=\"tb\">";
   // 按「标识 → 型号/固件 → 网络 → 配置」排列，与网页概览的「📡 设备信息」顺序保持一致
   inner += buildMailRow("设备地址", deviceUrl);
   inner += buildMailRow("IP地址", ip);
@@ -299,14 +333,13 @@ String htmlEscape(const String& str) {
 
 // 表格行：左侧灰色字段名 + 右侧值（键值均已转义）
 String buildMailRow(const String& key, const String& val) {
-  return "<tr><td style=\"padding:8px 0;width:96px;color:#888;vertical-align:top;white-space:nowrap;\">" + htmlEscape(key) +
-         "</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;word-break:break-all;\">" + htmlEscape(val) + "</td></tr>";
+  return "<tr><td class=\"k\">" + htmlEscape(key) +
+         "</td><td class=\"v\">" + htmlEscape(val) + "</td></tr>";
 }
 
 // 把若干表格行包成带内边距的表格块
 String buildMailTable(const String& rows) {
-  return "<div style=\"padding:16px 20px 4px;\"><table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">" +
-         rows + "</table></div>";
+  return "<div class=\"blk\"><table class=\"tb\">" + rows + "</table></div>";
 }
 
 // 所有通知邮件共用的一段「设备标识信息」：系统时间 + 本机号码（取不到号码时回退设备 IP）。
@@ -319,21 +352,20 @@ static String buildMailInfoBlock() {
   } else {
     rows += buildMailRow("设备IP", getDeviceIp());   // 无号码时用 IP 标识设备
   }
-  return "<div style=\"padding:12px 20px 0;border-top:1px solid #f0f0f0;margin-top:12px;\">"
-         "<table style=\"width:100%;border-collapse:collapse;font-size:13px;color:#666;line-height:1.5;\">" +
-         rows + "</table></div>";
+  return "<div class=\"info\"><table class=\"tb\">" + rows + "</table></div>";
 }
 
 // 完整 HTML 邮件正文：外层灰底 + 白色卡片 + 渐变标题栏 + 卡片主体 + 设备标识信息 + 底部标识
 String buildMailHtml(const String& title, const String& inner, int maxWidth) {
-  String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
-  html += "<div style=\"max-width:" + String(maxWidth) + "px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
-  html += "<div style=\"background:linear-gradient(135deg,#4f8cff,#2f6fed);color:#ffffff;padding:14px 20px;\">";
-  html += "<span style=\"font-size:17px;font-weight:600;\">" + title + "</span>";
-  html += "</div>";
+  // 样式表随每封邮件一起发出：邮件正文是片段，没有 <head> 可放 <style>，只能贴在正文开头
+  String html = "<style>" + String(MAIL_CSS) + "</style>";
+  html += "<div class=\"mw\">";
+  // 卡片宽度按邮件类型可变，动态值保留内联
+  html += "<div class=\"card\" style=\"max-width:" + String(maxWidth) + "px\">";
+  html += "<div class=\"hd\"><span>" + title + "</span></div>";
   html += inner;
   html += buildMailInfoBlock();
-  html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;margin-top:12px;\">SMS Forwarder · 短信转发通知</div>";
+  html += "<div class=\"ft\">SMS Forwarder · 短信转发通知</div>";
   html += "</div></div>";
   return html;
 }
@@ -1035,7 +1067,7 @@ bool notifyQueueReboot() {
   job.mailBit = EMAIL_NOTIFY_REBOOT;   // 通知邮件；关闭时直接重启，不发邮件
   job.enqueuedAt = millis();
   copyField(job.subject, "重启命令已执行", NOTIFY_SUBJECT_SIZE);
-  String inner = "<div style=\"padding:16px 20px;font-size:14px;color:#333;line-height:1.6;\">收到 RESET 命令，即将重启模组与 ESP32。</div>";
+  String inner = "<div class=\"note\">收到 RESET 命令，即将重启模组与 ESP32。</div>";
   copyField(job.body, buildMailHtml("🔄 重启命令已执行", inner).c_str(), NOTIFY_BODY_SIZE);
 
   notifyTail = (notifyTail + 1) % NOTIFY_QUEUE_SIZE;
@@ -1075,20 +1107,17 @@ static void buildSmsMail(const char* sender, const char* message, const char* ti
 
   // 验证码高亮块
   if (verifyCode.length() > 0) {
-    inner += "<div style=\"margin:16px 20px 0;background:#fff4f4;border:1px solid #ffd0d0;border-radius:8px;padding:12px 16px;text-align:center;\">";
-    inner += "<div style=\"font-size:12px;color:#c0392b;letter-spacing:2px;\">验证码</div>";
-    inner += "<div style=\"font-size:28px;font-weight:700;color:#d00;letter-spacing:5px;margin-top:2px;\">" + htmlEscape(verifyCode) + "</div>";
-    inner += "</div>";
+    inner += "<div class=\"code\"><div class=\"code1\">验证码</div>";
+    inner += "<div class=\"code2\">" + htmlEscape(verifyCode) + "</div></div>";
   }
 
   // 信息字段（表格）
-  inner += "<div style=\"padding:16px 20px;\">";
-  inner += "<table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;line-height:1.5;\">";
-  inner += "<tr><td style=\"padding:8px 0;width:64px;color:#888;vertical-align:top;\">发件人</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(String(sender));
-  if (senderName.length() > 0) inner += " <span style=\"color:#2f6fed;\">(" + htmlEscape(senderName) + ")</span>";
+  inner += "<div class=\"rows\"><table class=\"tb\">";
+  inner += "<tr><td class=\"kn\">发件人</td><td class=\"vn\">" + htmlEscape(String(sender));
+  if (senderName.length() > 0) inner += " <span class=\"hl\">(" + htmlEscape(senderName) + ")</span>";
   inner += "</td></tr>";
-  inner += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">时间</td><td style=\"padding:8px 0;border-bottom:1px solid #f0f0f0;\">" + htmlEscape(tsFormatted) + "</td></tr>";
-  inner += "<tr><td style=\"padding:8px 0;color:#888;vertical-align:top;\">内容</td><td style=\"padding:8px 0;word-break:break-word;\">" + htmlEscape(String(message)) + "</td></tr>";
+  inner += "<tr><td class=\"kn\">时间</td><td class=\"vn\">" + htmlEscape(tsFormatted) + "</td></tr>";
+  inner += "<tr><td class=\"kn\">内容</td><td class=\"vl\">" + htmlEscape(String(message)) + "</td></tr>";
   inner += "</table></div>";
 
   html = buildMailHtml("📱 " + htmlEscape(subject), inner);
