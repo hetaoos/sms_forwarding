@@ -13,6 +13,7 @@ bool apMode = false;
 String modemManufacturer = "未知";
 String modemModel = "未知";
 String modemVersion = "未知";
+String modemOwnNumber = "";
 unsigned long lastModemInitAttempt = 0;
 unsigned long lastPrintTime = 0;
 ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];

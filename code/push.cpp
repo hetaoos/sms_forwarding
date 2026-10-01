@@ -145,13 +145,7 @@ void sendStartupEmail() {
   String ip = WiFi.localIP().toString();
   int wifiRssi = WiFi.RSSI();
 
-  String timeStr;
-  if (timeSynced) {
-    timeStr = formatSystemTime(time(nullptr));
-  } else {
-    timeStr = "未同步（使用设备时间）";
-  }
-
+  // 系统时间由 buildMailHtml() 的公共信息块统一附加，此处不再重复
   // 模组初始化状态
   String initStatus = modemReady ? "已就绪" : "未就绪";
   String netStatus  = modemReady ? "已注册网络" : "未注册（无SIM卡或信号差）";
@@ -170,9 +164,7 @@ void sendStartupEmail() {
   String rssiStr = sig.rssiText;
   String sigSource = sigOk ? sig.source : "未取到";
 
-  // 本机号码（SIM 卡 MSISDN）
-  String ownNumber = getModemOwnNumber();
-  if (ownNumber.length() == 0) ownNumber = "未获取到（SIM未存储号码或无服务）";
+  // 本机号码由 buildMailHtml() 的公共信息块统一附加（取不到时回退设备 IP）
   String adminNumber = config.adminPhone.length() > 0 ? config.adminPhone : "未设置";
 
   // 推送通道统计
@@ -199,7 +191,6 @@ void sendStartupEmail() {
   inner += buildMailRow("设备地址", deviceUrl);
   inner += buildMailRow("IP地址", ip);
   inner += buildMailRow("WiFi信号", String(wifiRssi) + " dBm");
-  inner += buildMailRow("系统时间", timeStr);
   inner += buildMailRow("推送通道", channelSummary);
   inner += "</table></div>";
 
@@ -212,8 +203,7 @@ void sendStartupEmail() {
                                      buildMailRow("RSRQ", rsrqStr) +
                                      buildMailRow("RSSI", rssiStr) +
                                      buildMailRow("数据来源", sigSource));
-  inner += mailSection("📱 号码信息", buildMailRow("本机号码", ownNumber) +
-                                     buildMailRow("管理员号码", adminNumber));
+  inner += mailSection("📱 号码信息", buildMailRow("管理员号码", adminNumber));
 
   String html = buildMailHtml("🚀 短信转发器已启动", inner, 600);
   sendEmailNotification("短信转发器已启动", html.c_str(), MAIL_BODY_HTML);
@@ -315,7 +305,22 @@ String buildMailTable(const String& rows) {
          rows + "</table></div>";
 }
 
-// 完整 HTML 邮件正文：外层灰底 + 白色卡片 + 渐变标题栏 + 卡片主体 + 底部标识
+// 所有通知邮件共用的一段「设备标识信息」：系统时间 + 本机号码（取不到号码时回退设备 IP）。
+// 每条通知都应能看出「什么时候、哪台设备」，因此统一在 buildMailHtml() 里追加，
+// 各邮件不必各自拼装，新增邮件类型也自动带上（只读缓存，不碰串口）。
+static String buildMailInfoBlock() {
+  String rows = buildMailRow("系统时间", timeSynced ? formatSystemTime(time(nullptr)) : String("未同步"));
+  if (modemOwnNumber.length() > 0) {
+    rows += buildMailRow("本机号码", modemOwnNumber);
+  } else {
+    rows += buildMailRow("设备IP", getDeviceIp());   // 无号码时用 IP 标识设备
+  }
+  return "<div style=\"padding:12px 20px 0;border-top:1px solid #f0f0f0;margin-top:12px;\">"
+         "<table style=\"width:100%;border-collapse:collapse;font-size:13px;color:#666;line-height:1.5;\">" +
+         rows + "</table></div>";
+}
+
+// 完整 HTML 邮件正文：外层灰底 + 白色卡片 + 渐变标题栏 + 卡片主体 + 设备标识信息 + 底部标识
 String buildMailHtml(const String& title, const String& inner, int maxWidth) {
   String html = "<div style=\"background:#f4f6f8;padding:16px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;\">";
   html += "<div style=\"max-width:" + String(maxWidth) + "px;margin:0 auto;background:#ffffff;border:1px solid #e3e8ee;border-radius:10px;overflow:hidden;\">";
@@ -323,6 +328,7 @@ String buildMailHtml(const String& title, const String& inner, int maxWidth) {
   html += "<span style=\"font-size:17px;font-weight:600;\">" + title + "</span>";
   html += "</div>";
   html += inner;
+  html += buildMailInfoBlock();
   html += "<div style=\"padding:10px 20px;background:#fafbfc;color:#aaa;font-size:12px;border-top:1px solid #f0f0f0;margin-top:12px;\">SMS Forwarder · 短信转发通知</div>";
   html += "</div></div>";
   return html;

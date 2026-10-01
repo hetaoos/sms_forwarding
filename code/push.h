@@ -10,7 +10,8 @@ enum MailBodyType {
 };
 
 // ---- HTML 邮件正文构建工具（启动通知/短信转发/命令结果等各类邮件共用同一套卡片风格）----
-// 把标题与卡片主体包成完整 HTML 正文：灰底 + 白色圆角卡片 + 渐变标题栏 + 底部标识
+// 把标题与卡片主体包成完整 HTML 正文：灰底 + 白色圆角卡片 + 渐变标题栏 + 公共信息块 + 底部标识。
+// 公共信息块（系统时间 + 本机号码，无号码时回退设备 IP）会在函数内部自动追加，调用方无需关心。
 // title 为标题栏文字（可带 emoji，需自行转义），inner 为卡片主体 HTML 片段，maxWidth 为卡片宽度
 String buildMailHtml(const String& title, const String& inner, int maxWidth = 560);
 // 一行「键: 值」表格行（键值均已转义，可直接拼接）

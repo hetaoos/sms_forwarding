@@ -30,6 +30,13 @@ void parseATI(const String& resp, String& manufacturer, String& model, String& v
 bool getModemSignal(SignalInfo& info);
 // 获取本机号码（SIM 卡 MSISDN，AT+CNUM），取不到时返回空串
 String getModemOwnNumber();
+// ---- 本机号码缓存 ----
+// CNUM 要占用串口且部分 SIM 刚注册完就读不到，因此不在每次发邮件/刷页面时现查：
+// 模组初始化成功后查一次写入全局 modemOwnNumber，之后各处直接读缓存；
+// 缓存为空时再由 ownNumberTick() 在主循环里按间隔兜底补查。
+void cacheOwnNumber();
+// 主循环调用：缓存为空且模组空闲时补查一次本机号码（限制频次，避免频繁占串口）
+void ownNumberTick();
 // ---- SIM 卡热插拔检测 ----
 // 运行中换卡不必重启设备：主循环每 20 秒轮询 AT+CPIN?，并用模组主动上报的 +CPIN URC 做快速通道。
 // 插卡 → 自动重跑模组初始化（AT 握手 → CNMI → PDU → 等网络注册），失败再兜底断电重启一次；

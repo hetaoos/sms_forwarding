@@ -68,6 +68,7 @@ extern bool apMode;        // true=当前运行在配置 AP 模式（WiFi 连接
 extern String modemManufacturer;  // 模组厂商（ATI 解析）
 extern String modemModel;         // 模组型号（ATI 解析）
 extern String modemVersion;       // 模组固件版本（ATI 解析）
+extern String modemOwnNumber;     // 本机号码（SIM MSISDN）：模组初始化完成后查询一次并缓存，空串=未取到
 extern unsigned long lastModemInitAttempt;
 extern unsigned long lastPrintTime;
 extern ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];

@@ -139,3 +139,12 @@ String getDeviceUrl() {
   }
   return "http://" + WiFi.localIP().toString() + "/";
 }
+
+// 获取当前设备 IP（AP 模式下返回配置热点 IP，否则返回 STA IP）
+// 取不到本机号码时，通知邮件用它作为设备标识
+String getDeviceIp() {
+  if (apMode && WiFi.softAPIP() != IPAddress(0, 0, 0, 0)) {
+    return WiFi.softAPIP().toString();
+  }
+  return WiFi.localIP().toString();
+}

@@ -269,6 +269,8 @@ bool modemInit(bool background) {
     // 模组就绪后立刻用基站网络时间校准系统时间（NTP 走 WiFi，这条路径无外网时也能校准）。
     // 基站时间下发可能有延迟，此刻失败则由 loop() 的 modemTimeSyncTick() 定时重试。
     trySyncModemTime();
+    // 号码很稳定，初始化成功后查一次即可长期复用（邮件等场合不再现查串口）
+    cacheOwnNumber();
   } else {
     logCaptureLn(String("⚠️ 模组初始化未完成，系统将定时自动重试（不影响网页访问）"));
   }
@@ -560,6 +562,33 @@ String getModemOwnNumber() {
   return "";
 }
 
+// ---- 本机号码缓存 ----
+// 说明：CNUM 是一次串口收发，且 SIM 刚完成网络注册时偶尔读不到。
+// 因此初始化成功后立刻查一次并缓存（cacheOwnNumber），后续邮件/页面只读全局变量；
+// 缓存为空时由 ownNumberTick() 在主循环里低频补查，绝不在 URC/HTTP 回调线程里现查串口。
+#define OWN_NUMBER_RETRY_MS 60000UL   // 缓存为空时的补查间隔
+
+static unsigned long s_lastOwnNumberAttempt = 0;
+
+void cacheOwnNumber() {
+  s_lastOwnNumberAttempt = millis();
+  if (!modemReady) return;
+  String num = getModemOwnNumber();
+  if (num.length() > 0) {
+    modemOwnNumber = num;
+    logCaptureLn(String("已缓存本机号码: " + num));
+  } else {
+    logCaptureLn(String("未取到本机号码（SIM 未存储号码或暂无服务），通知邮件将回退显示设备 IP"));
+  }
+}
+
+void ownNumberTick() {
+  if (modemOwnNumber.length() > 0) return;          // 已缓存，无需再查
+  if (!modemReady || modemBusy()) return;           // 模组不可用或串口正忙：下一轮再说
+  if (millis() - s_lastOwnNumberAttempt < OWN_NUMBER_RETRY_MS) return;
+  cacheOwnNumber();
+}
+
 // ---- SIM 卡热插拔检测 ----
 // 轮询 AT+CPIN?（主循环每 SIM_POLL_INTERVAL_MS 一次）+ 解析模组主动上报的 +CPIN URC。
 // 所有耗时动作（初始化、断电重启）都只在 simHotplugTick() 里、且模组串口空闲时执行，
@@ -663,6 +692,7 @@ static void applySimStatus(SimStatus st) {
   if (st == SIM_STATUS_ABSENT) {
     s_simRebootTried = false;
     s_simRebootAt = 0;
+    modemOwnNumber = "";   // 换/拔卡后丢弃旧号码缓存，等下次初始化重新获取
     if (prev == SIM_STATUS_READY || prev == SIM_STATUS_LOCKED) {
       logCaptureLn(String("⚠️ 检测到 SIM 卡已拔出，短信收发不可用"));
     }

@@ -154,6 +154,7 @@ void loop() {
   simHotplugTick();      // SIM 热插拔检测：插卡自动初始化 / 拔卡置未就绪
   modemAutoRecover();
   modemTimeSyncTick();   // 模组就绪后用 4G 网络时间校准系统时间，之后每 24 小时再校准一次
+  ownNumberTick();       // 本机号码缓存为空时补查一次（供通知邮件使用）
   if (Serial.available()) Serial1.write(Serial.read());
   checkSerial1URC();
   // 推送/邮件的实际发送放在这里分片执行（每次最多一次网络请求），
